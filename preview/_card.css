@@ -1,0 +1,118 @@
+/* Shared style for design-system preview cards.
+   Each card is rendered inside its own ~700x150 viewport. */
+@import url('../colors_and_type.css');
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  min-height: 100%;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  overflow: hidden;
+}
+
+.card {
+  width: 100%;
+  min-height: 100vh;
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,0.025) 1px, transparent 0) 0 0 / 24px 24px,
+    var(--bg-0);
+}
+
+.row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1 1 auto; }
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+
+.muted { color: var(--fg-3); }
+.mono { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+
+/* Swatch primitives */
+.swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.swatch-chip {
+  height: 56px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+.swatch-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.swatch-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+/* Specimen */
+.specimen-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+/* Component preview helpers */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--dur-micro) var(--ease-out);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-secondary {
+  background: var(--bg-3);
+  color: var(--fg-1);
+  border-color: var(--border-default);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--fg-2);
+}
+.btn-danger {
+  background: var(--bg-3);
+  color: var(--danger);
+  border-color: var(--border-default);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}

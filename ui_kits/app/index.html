@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Endurance.OS</title>
+  <base href="/ui_kits/app/"/>
+  <meta name="viewport" content="width=1440"/>
+  <link rel="stylesheet" href="../../colors_and_type.css"/>
+  <link rel="icon" type="image/svg+xml" href="../../assets/logo-mark.svg"/>
+  <style>
+    * { box-sizing: border-box; }
+    html, body, #root { height: 100%; margin: 0; }
+    body {
+      background: var(--bg-0);
+      color: var(--fg-1);
+      font-family: var(--font-sans);
+      overflow: hidden;
+    }
+    ::selection { background: var(--accent-soft); color: var(--fg-1); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+    /* Layout */
+    .app-shell {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+    }
+    .app-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .app-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 32px 40px 64px;
+      max-width: 100%;
+    }
+    .app-content > .inner {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    /* Top utility bar inside main */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--bg-0);
+      gap: 12px;
+    }
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--fg-3);
+    }
+    .crumb-sep {
+      color: var(--fg-4);
+    }
+  </style>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <!-- Phosphor Icons (web font; light + duotone weights) -->
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/light/style.css"/>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/duotone/style.css"/>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Components -->
+  <script type="text/babel" src="Atoms.jsx"></script>
+  <script type="text/babel" src="Sidebar.jsx"></script>
+  <script type="text/babel" src="DashboardView.jsx"></script>
+  <script type="text/babel" src="ContextView.jsx"></script>
+  <script type="text/babel" src="CoachPanel.jsx"></script>
+  <script type="text/babel" src="OtherViews.jsx"></script>
+  <script type="text/babel" src="CommandPalette.jsx"></script>
+
+  <!-- App -->
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [route, setRoute] = useState('dashboard');
+      const [coachOpen, setCoachOpen] = useState(true);
+      const [cmdOpen, setCmdOpen] = useState(false);
+
+      useEffect(() => {
+        function onKey(e) {
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            setCmdOpen(o => !o);
+          }
+          if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+            e.preventDefault();
+            setCoachOpen(o => !o);
+          }
+        }
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, []);
+
+      const effectiveCoachOpen = coachOpen;
+
+      const routeMeta = {
+        dashboard: { breadcrumb: ['Mira Lindqvist', 'Dashboard'] },
+        calendar:  { breadcrumb: ['Mira Lindqvist', 'Calendar'] },
+        context:   { breadcrumb: ['Mira Lindqvist', 'Context'] },
+        races:     { breadcrumb: ['Mira Lindqvist', 'Races'] },
+        settings:  { breadcrumb: ['Mira Lindqvist', 'Settings'] },
+      };
+
+      const view = {
+        dashboard: <DashboardView onOpenCoach={() => setCoachOpen(true)} onNavigate={setRoute} />,
+        calendar:  <CalendarView />,
+        context:   <ContextView />,
+        races:     <RacesView />,
+        settings:  <SettingsView />,
+      }[route];
+
+      return (
+        <div className="app-shell" data-screen-label={`Endurance.OS · ${routeMeta[route].breadcrumb.slice(-1)[0]}`}>
+          <Sidebar
+            activeRoute={route}
+            onNavigate={setRoute}
+            athlete={{ name: 'Mira Lindqvist', discipline: 'Triathlon · M70.3' }}
+          />
+          <main className="app-main">
+            <div className="top-bar">
+              <div className="crumb">
+                {routeMeta[route].breadcrumb.map((c, i, arr) => (
+                  <React.Fragment key={i}>
+                    <span style={{ color: i === arr.length - 1 ? 'var(--fg-1)' : 'var(--fg-3)' }}>{c}</span>
+                    {i < arr.length - 1 && <span className="crumb-sep">/</span>}
+                  </React.Fragment>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Button kind="ghost" size="sm" icon="search" onClick={() => setCmdOpen(true)}>
+                  Search… <Kbd>⌘K</Kbd>
+                </Button>
+                <Button
+                  kind={effectiveCoachOpen ? 'ai' : 'ghost'}
+                  size="sm"
+                  icon="sparkles"
+                  onClick={() => setCoachOpen(o => !o)}
+                >
+                  Coach <Kbd>⌘/</Kbd>
+                </Button>
+                <Avatar initials="ML" color="#D8FE5F" />
+              </div>
+            </div>
+            <div className="app-content">
+              <div className="inner">{view}</div>
+            </div>
+          </main>
+          {effectiveCoachOpen && <CoachPanel onClose={() => setCoachOpen(false)} />}
+          <CommandPalette
+            open={cmdOpen}
+            onClose={() => setCmdOpen(false)}
+            onNavigate={setRoute}
+          />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

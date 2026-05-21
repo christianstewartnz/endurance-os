@@ -1,0 +1,11 @@
+﻿{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "endurance-os",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-l", "5173", "C:\\Users\\ChristianStewart\\Documents\\endurance.os"],
+      "port": 5173
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+:root {
+  /* Surfaces */
+  --bg-0: #08090A;
+  --bg-1: #0E0F11;
+  --bg-2: #16181C;
+  --bg-3: #1E2025;
+  --bg-4: #262931;
+
+  /* Foreground */
+  --fg-1: #F7F8F8;
+  --fg-2: #B4B8BE;
+  --fg-3: #6F7480;
+  --fg-4: #494D55;
+  --fg-inverse: #08090A;
+
+  /* Borders */
+  --border-subtle:  #1A1C20;
+  --border-default: #26292F;
+  --border-strong:  #3A3F47;
+
+  /* Brand */
+  --accent:       #D8FE5F;
+  --accent-hover: #C9EE52;
+  --accent-press: #B8DD45;
+  --accent-fg:    #08090A;
+  --accent-soft:  rgba(216, 254, 95, 0.12);
+
+  /* AI surface */
+  --ai:      #8B7CF6;
+  --ai-soft: rgba(139, 124, 246, 0.14);
+  --ai-edge: rgba(139, 124, 246, 0.32);
+
+  /* Training zones */
+  --z1: #5C6470;
+  --z2: #3FB37F;
+  --z3: #E8C547;
+  --z4: #E89B3C;
+  --z5: #E5484D;
+
+  /* Semantic */
+  --success: #3FB37F;
+  --warning: #E89B3C;
+  --danger:  #E5484D;
+  --info:    #3B9EFF;
+
+  /* Typography — uses next/font CSS vars with fallbacks */
+  --font-sans: var(--font-geist, 'Geist', ui-sans-serif, system-ui, sans-serif);
+  --font-mono: var(--font-geist-mono, 'Geist Mono', ui-monospace, 'SF Mono', monospace);
+
+  /* Motion */
+  --dur-micro:    120ms;
+  --dur-standard: 180ms;
+  --dur-panel:    260ms;
+  --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Layout */
+  --sidebar-w:    240px;
+  --rightpanel-w: 360px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg-0);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a { color: inherit; text-decoration: none; }
+
+input, button, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+::selection { background: var(--accent-soft); color: var(--fg-1); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* App shell */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 40px 64px;
+}
+.app-content > .inner {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+/* Top bar */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-0);
+  gap: 12px;
+  flex-shrink: 0;
+}
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.crumb-sep { color: var(--fg-4); }

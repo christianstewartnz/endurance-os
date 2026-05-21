@@ -1,0 +1,22 @@
+Endurance. OS build order
+
+Step 1 — Supabase foundation
+Create your project in Supabase and run the schema migrations from CONTEXT_SPEC.md. All the SQL is already written — you can paste it directly into Cursor and have it generate the migration files. Enable RLS on every table. This is a few hours of work max.
+
+Step 2 — Auth + onboarding
+Wire up Supabase auth (email/password to start, Google if you want). Build the onboarding flow — connect Intervals.icu API key, fill out athlete profile, coach style, plan DNA. This is your first real user interaction and sets up the context brain from day one.
+
+Step 3 — Intervals.icu read sync
+Get data flowing in. Wellness cache first (HRV, sleep, TSB), then activity sync, then fitness metrics (FTP/zones). Start with polling every 15 minutes — add webhooks later. Once this works your dashboard readiness cards and session tiles have real data.
+
+Step 4 — Wire the AI coach sidebar
+Connect the sidebar to the real Anthropic API using your buildSystemPrompt() function. At this point the coach has full context and can have real conversations. This is the moment the product actually works end to end — even if everything else is rough.
+
+Step 5 — Context suggestions pipeline
+Build the context_suggestions table flow — AI proposes, suggestion card appears in UI, user accepts/edits/rejects, target table updates. This is what makes the memory system real.
+
+Step 6 — Session review flow
+Wire up the "Review session" button to inject session context and open a structured review conversation. Auto-write session notes at the end.
+
+Step 7 — Intervals write-back
+When user accepts a plan adaptation, write it back to Intervals.icu via the bulk events endpoint. This closes the loop — AI suggests → user accepts → Garmin gets updated workout.

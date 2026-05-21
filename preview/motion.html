@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>motion</title>
+<link rel="stylesheet" href="_card.css"/>
+</head>
+<body>
+<div class="card">
+  <div class="eyebrow">Motion · fast, quiet, ease-out</div>
+  <div class="col" style="gap:10px;">
+    <div style="display:grid;grid-template-columns:120px 90px 1fr;align-items:center;gap:14px;">
+      <div class="mono" style="font-size:11px;color:var(--fg-2);">--dur-micro</div>
+      <div class="mono" style="font-size:11px;color:var(--fg-3);">120ms</div>
+      <div style="font-size:12px;color:var(--fg-2);">Hover, press, color shift</div>
+    </div>
+    <div style="display:grid;grid-template-columns:120px 90px 1fr;align-items:center;gap:14px;">
+      <div class="mono" style="font-size:11px;color:var(--fg-2);">--dur-standard</div>
+      <div class="mono" style="font-size:11px;color:var(--fg-3);">180ms</div>
+      <div style="font-size:12px;color:var(--fg-2);">Menus, tooltips, badges</div>
+    </div>
+    <div style="display:grid;grid-template-columns:120px 90px 1fr;align-items:center;gap:14px;">
+      <div class="mono" style="font-size:11px;color:var(--fg-2);">--dur-panel</div>
+      <div class="mono" style="font-size:11px;color:var(--fg-3);">260ms</div>
+      <div style="font-size:12px;color:var(--fg-2);">Side panel, modal in/out</div>
+    </div>
+    <div style="display:grid;grid-template-columns:120px 90px 1fr;align-items:center;gap:14px;padding-top:6px;border-top:1px solid var(--border-subtle);margin-top:4px;">
+      <div class="mono" style="font-size:11px;color:var(--fg-2);">--ease-out</div>
+      <div class="mono" style="font-size:11px;color:var(--fg-3);">cubic-bezier</div>
+      <div class="mono" style="font-size:11px;color:var(--fg-3);">0.16, 1, 0.3, 1</div>
+    </div>
+  </div>
+  <div style="font-size:12px;color:var(--fg-3);">No bounces, no springs, no overshoot. Nothing above 300ms.</div></div>
+</body>
+</html>
