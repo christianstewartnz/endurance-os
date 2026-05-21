@@ -4,23 +4,88 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Icon, Button, Pill, Sparkline } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
+import type { WellnessCacheRow, SessionNoteRow, IntervalEvent } from '@/lib/intervals/types'
 
-export default function DashboardView() {
+// ── Props ────────────────────────────────────────────────────────────────────
+
+interface DashboardProps {
+  wellnessToday: WellnessCacheRow | null
+  wellness14d: WellnessCacheRow[]
+  weekSessions: SessionNoteRow[]
+  weekEvents: IntervalEvent[]
+  hasIntervalsConnected: boolean
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatHeaderDate(): string {
+  const d = new Date()
+  const day = d.toLocaleDateString('en-US', { weekday: 'long' })
+  const month = d.toLocaleDateString('en-US', { month: 'short' })
+  return `${day} · ${month} ${d.getDate()}`
+}
+
+function formatDuration(secs: number | null): string {
+  if (!secs) return '—'
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `0:${String(m).padStart(2, '0')}`
+}
+
+function getZoneFromName(name: string): string {
+  const lower = name.toLowerCase()
+  if (/z5|vo2|max|race\s?pace/.test(lower)) return 'z5'
+  if (/z4|threshold|tempo|ftp/.test(lower)) return 'z4'
+  if (/z3|sweet\s?spot|moderate/.test(lower)) return 'z3'
+  if (/z1|recovery|easy|rest/.test(lower)) return 'z1'
+  return 'z2'
+}
+
+function getZoneFromType(sessionType: string | null): string {
+  switch (sessionType) {
+    case 'strength': return 'z3'
+    case 'swimming': return 'z2'
+    case 'running':  return 'z2'
+    case 'cycling':  return 'z2'
+    default:         return 'z2'
+  }
+}
+
+// ── Root component ───────────────────────────────────────────────────────────
+
+export default function DashboardView({
+  wellnessToday,
+  wellness14d,
+  weekSessions,
+  weekEvents,
+  hasIntervalsConnected,
+}: DashboardProps) {
   const router = useRouter()
   const { openCoach } = useCoachPanel()
+
+  // Build header subtitle from real HRV data if available
+  const headerSubtitle = (() => {
+    if (wellnessToday?.hrv_delta_14d_percent != null) {
+      const pct = Math.round(Math.abs(wellnessToday.hrv_delta_14d_percent))
+      const dir = wellnessToday.hrv_delta_14d_percent < 0 ? 'below' : 'above'
+      return `HRV is ${pct}% ${dir} 14-day baseline.`
+    }
+    if (!hasIntervalsConnected) return 'Connect Intervals.icu in Settings to enable AI coaching.'
+    return 'Wellness data syncing…'
+  })()
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', paddingBottom: 4 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
-            Tuesday · Jun 3
+            {formatHeaderDate()}
           </div>
           <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.1, color: 'var(--fg-1)' }}>
             Today&apos;s training intelligence
           </h1>
           <div style={{ fontSize: 13, color: 'var(--fg-2)', marginTop: 6 }}>
-            HRV is 8% below baseline. Coach has proposed an adaptation to today&apos;s session.
+            {headerSubtitle}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -33,12 +98,19 @@ export default function DashboardView() {
       </div>
 
       <TodaysSessionCard onOpenCoach={openCoach} />
-      <ReadinessRow />
-      <WeekStrip />
+      <ReadinessRow
+        wellnessToday={wellnessToday}
+        wellness14d={wellness14d}
+        hasIntervalsConnected={hasIntervalsConnected}
+        onConnect={() => router.push('/settings?section=connections')}
+      />
+      <WeekStrip weekSessions={weekSessions} weekEvents={weekEvents} />
       <MemoryInbox onNavigateToContext={() => router.push('/context')} />
     </div>
   )
 }
+
+// ── TodaysSessionCard (unchanged logic) ──────────────────────────────────────
 
 function TodaysSessionCard({ onOpenCoach }: { onOpenCoach: () => void }) {
   const [adaptation, setAdaptation] = useState<'pending' | 'accepted' | 'rejected'>('pending')
@@ -84,8 +156,6 @@ function TodaysSessionCard({ onOpenCoach }: { onOpenCoach: () => void }) {
             <Button kind="ghost" size="md" iconRight="chevron-down" style={{ marginLeft: 'auto' }}>More</Button>
           </div>
         </div>
-
-        {/* Workout profile */}
         <div style={{ background: 'var(--bg-1)', border: '1px solid var(--border-subtle)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
             <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Profile</span>
@@ -177,14 +247,124 @@ function WorkoutProfile() {
   )
 }
 
-function ReadinessRow() {
-  const cards = [
-    { k: 'HRV',        v: '64',   u: 'ms',  delta: '−8% · 14d',      tone: 'warning' as const, spark: [72,70,68,71,69,67,68,66,70,68,65,66,64,64], baseline: 70 },
-    { k: 'Resting HR', v: '48',   u: 'bpm', delta: '+2 · 7d',         tone: 'warning' as const, spark: [46,45,47,45,46,47,46,48,47,49,48,48,49,48], baseline: 46 },
-    { k: 'Sleep',      v: '6:12', u: 'h',   delta: '−1:18 · target',  tone: 'danger'  as const, spark: [7.4,7.8,7.2,8.1,7.5,7.2,6.9,7.1,7.0,6.5,6.8,6.2,5.9,6.2], baseline: 7.5 },
-    { k: 'Form (TSB)', v: '−12',  u: '',    delta: 'Building',         tone: 'neutral' as const, spark: [4,2,-1,-3,-2,-5,-7,-6,-8,-10,-9,-11,-12,-12], baseline: 0 },
-  ]
+// ── ReadinessRow ─────────────────────────────────────────────────────────────
+
+interface ReadinessRowProps {
+  wellnessToday: WellnessCacheRow | null
+  wellness14d: WellnessCacheRow[]
+  hasIntervalsConnected: boolean
+  onConnect: () => void
+}
+
+function ReadinessRow({ wellnessToday, wellness14d, hasIntervalsConnected, onConnect }: ReadinessRowProps) {
+  if (!hasIntervalsConnected || (wellness14d.length === 0 && !wellnessToday)) {
+    return (
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+        <Icon name="activity" size={24} color="var(--fg-3)" />
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-1)', marginBottom: 4 }}>No wellness data yet</div>
+          <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Connect Intervals.icu to see HRV, sleep, and form metrics.</div>
+        </div>
+        <Button kind="secondary" size="sm" icon="plug" onClick={onConnect}>Connect Intervals.icu</Button>
+      </div>
+    )
+  }
+
+  const spark14 = (key: keyof WellnessCacheRow) =>
+    wellness14d.map((w) => (w[key] as number | null) ?? 0)
+
+  const hrv      = wellnessToday?.hrv_rmssd ?? null
+  const hrvDelta = wellnessToday?.hrv_delta_14d_percent ?? null
+  const restHR   = wellnessToday?.resting_hr ?? null
+  const sleep    = wellnessToday?.sleep_hours ?? null
+  const tsb      = wellnessToday?.tsb ?? null
+
+  // Average resting HR over last 7 days for delta
+  const hr7d = wellness14d.slice(-7).map((w) => w.resting_hr ?? 0).filter(Boolean)
+  const avgHR7d = hr7d.length ? hr7d.reduce((s, v) => s + v, 0) / hr7d.length : null
+  const hrDelta = restHR != null && avgHR7d != null ? Math.round(restHR - avgHR7d) : null
+
   const toneColor = { warning: '#E89B3C', danger: '#E5484D', neutral: 'var(--fg-3)' }
+
+  const hrTone = hrDelta != null && hrDelta > 2 ? 'warning' : 'neutral'
+  const hrvTone = hrvDelta != null && hrvDelta < -5 ? 'warning' : hrvDelta != null && hrvDelta < -10 ? 'danger' : 'neutral'
+  const sleepTarget = 7.5
+  const sleepDiff = sleep != null ? sleep - sleepTarget : null
+  const sleepTone = sleepDiff != null && sleepDiff < -1.5 ? 'danger' : sleepDiff != null && sleepDiff < -0.5 ? 'warning' : 'neutral'
+
+  function formatHrv() {
+    if (hrv == null) return '—'
+    return String(Math.round(hrv))
+  }
+  function formatHrvDelta() {
+    if (hrvDelta == null) return '—'
+    const sign = hrvDelta >= 0 ? '+' : ''
+    return `${sign}${Math.round(hrvDelta)}% · 14d`
+  }
+  function formatHrDelta() {
+    if (hrDelta == null) return '—'
+    const sign = hrDelta >= 0 ? '+' : ''
+    return `${sign}${hrDelta} · 7d`
+  }
+  function formatSleep() {
+    if (sleep == null) return '—'
+    const h = Math.floor(sleep)
+    const m = Math.round((sleep - h) * 60)
+    return `${h}:${String(m).padStart(2, '0')}`
+  }
+  function formatSleepDelta() {
+    if (sleepDiff == null) return '—'
+    const abs = Math.abs(sleepDiff)
+    const h = Math.floor(abs)
+    const m = Math.round((abs - h) * 60)
+    const sign = sleepDiff >= 0 ? '+' : '−'
+    return `${sign}${h}:${String(m).padStart(2, '0')} · target`
+  }
+  function formatTsb() {
+    if (tsb == null) return '—'
+    const sign = tsb >= 0 ? '+' : ''
+    return `${sign}${Math.round(tsb)}`
+  }
+
+  const cards = [
+    {
+      k: 'HRV',
+      v: formatHrv(),
+      u: 'ms',
+      delta: formatHrvDelta(),
+      tone: hrvTone as keyof typeof toneColor,
+      spark: spark14('hrv_rmssd'),
+      baseline: wellness14d.slice(0, -1).map((w) => w.hrv_rmssd ?? 0).filter(Boolean).reduce((s, v, _, a) => s + v / a.length, 0) || undefined,
+    },
+    {
+      k: 'Resting HR',
+      v: restHR != null ? String(Math.round(restHR)) : '—',
+      u: 'bpm',
+      delta: formatHrDelta(),
+      tone: hrTone as keyof typeof toneColor,
+      spark: spark14('resting_hr'),
+      baseline: avgHR7d ?? undefined,
+    },
+    {
+      k: 'Sleep',
+      v: formatSleep(),
+      u: 'h',
+      delta: formatSleepDelta(),
+      tone: sleepTone as keyof typeof toneColor,
+      spark: spark14('sleep_hours'),
+      baseline: sleepTarget,
+    },
+    {
+      k: 'Form (TSB)',
+      v: formatTsb(),
+      u: '',
+      delta: tsb != null ? (tsb > 5 ? 'Fresh' : tsb < -10 ? 'Fatigued' : 'Building') : '—',
+      tone: 'neutral' as keyof typeof toneColor,
+      spark: spark14('tsb'),
+      baseline: 0,
+    },
+  ]
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
       {cards.map((c) => (
@@ -207,48 +387,115 @@ function ReadinessRow() {
   )
 }
 
-function WeekStrip() {
-  const days = [
-    { d: 'Mon', date: '2', type: 'Z2 base',   dur: '1:30', tss: 62,  zone: 'z2', state: 'done' },
-    { d: 'Tue', date: '3', type: 'Threshold', dur: '1:42', tss: 128, zone: 'z4', state: 'today' },
-    { d: 'Wed', date: '4', type: 'Recovery',  dur: '0:45', tss: 24,  zone: 'z1', state: 'planned' },
-    { d: 'Thu', date: '5', type: 'VO2 6×3',   dur: '1:15', tss: 96,  zone: 'z5', state: 'planned' },
-    { d: 'Fri', date: '6', type: 'Off',        dur: '—',   tss: 0,   zone: null, state: 'planned' },
-    { d: 'Sat', date: '7', type: 'Long ride',  dur: '3:30', tss: 195, zone: 'z2', state: 'planned' },
-    { d: 'Sun', date: '8', type: 'Brick run',  dur: '0:55', tss: 65,  zone: 'z3', state: 'planned' },
-  ]
+// ── WeekStrip ────────────────────────────────────────────────────────────────
+
+interface WeekStripProps {
+  weekSessions: SessionNoteRow[]
+  weekEvents: IntervalEvent[]
+}
+
+function WeekStrip({ weekSessions, weekEvents }: WeekStripProps) {
   const zColors: Record<string, string> = { z1: '#5C6470', z2: '#3FB37F', z3: '#E8C547', z4: '#E89B3C', z5: '#E5484D' }
+  const todayStr = new Date().toISOString().split('T')[0]
+
+  // Build Mon–Sun date array for the current week
+  const now = new Date()
+  const dayOfWeek = now.getDay()
+  const monday = new Date(now)
+  monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
+  const weekDates = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+    return d
+  })
+
+  // Index completed sessions by date
+  const sessionByDate = new Map<string, SessionNoteRow>()
+  for (const s of weekSessions) {
+    sessionByDate.set(s.session_date, s)
+  }
+
+  // Index planned events by date
+  const eventByDate = new Map<string, IntervalEvent>()
+  for (const e of weekEvents) {
+    const date = e.start_date_local.split('T')[0]
+    eventByDate.set(date, e)
+  }
+
+  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+  const plannedTss = weekEvents.reduce((s, e) => s + (e.icu_training_load ?? 0), 0)
+  const weekLabel = `${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekDates[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '18px 20px 12px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Week 11 · Build</div>
-          <span style={{ fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>Jun 2 – Jun 8</span>
-          <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>· 2 of 3 build weeks</span>
+          <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>This week</div>
+          <span style={{ fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{weekLabel}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>Planned TSS <span style={{ color: 'var(--fg-1)' }}>570</span></span>
+          {plannedTss > 0 && (
+            <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+              Planned TSS <span style={{ color: 'var(--fg-1)' }}>{Math.round(plannedTss)}</span>
+            </span>
+          )}
           <Button kind="ghost" size="sm" icon="chevron-left" />
           <Button kind="ghost" size="sm" icon="chevron-right" />
         </div>
       </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderTop: '1px solid var(--border-subtle)' }}>
-        {days.map((day, i) => {
-          const isToday = day.state === 'today'
-          const isDone  = day.state === 'done'
+        {weekDates.map((date, i) => {
+          const dateStr = date.toISOString().split('T')[0]
+          const session = sessionByDate.get(dateStr)
+          const event   = eventByDate.get(dateStr)
+          const isPast  = dateStr < todayStr
+          const isToday = dateStr === todayStr
+
+          let state: 'done' | 'today' | 'planned' | 'off'
+          let displayName: string | null = null
+          let duration: string | null = null
+          let tss: number | null = null
+          let zone: string | null = null
+
+          if (session) {
+            state = isToday ? 'today' : 'done'
+            displayName = session.session_type ?? 'Workout'
+            duration = formatDuration(session.actual_duration_seconds)
+            tss = session.actual_tss
+            zone = getZoneFromType(session.session_type)
+          } else if (event) {
+            state = isToday ? 'today' : 'planned'
+            displayName = event.name
+            duration = formatDuration(event.icu_training_load ? event.icu_training_load * 60 : null)
+            tss = event.icu_training_load
+            zone = getZoneFromName(event.name)
+          } else if (isPast) {
+            state = 'off'
+          } else {
+            state = 'off'
+          }
+
+          const isDone  = state === 'done'
+          const isCurrent = state === 'today'
+
           return (
-            <div key={day.d} style={{ padding: '14px 14px 18px', borderRight: i < 6 ? '1px solid var(--border-subtle)' : 'none', background: isToday ? 'var(--bg-3)' : 'transparent', position: 'relative', cursor: 'pointer' }}>
-              {isToday && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 2, background: 'var(--accent)' }} />}
+            <div key={dateStr} style={{ padding: '14px 14px 18px', borderRight: i < 6 ? '1px solid var(--border-subtle)' : 'none', background: isCurrent ? 'var(--bg-3)' : 'transparent', position: 'relative', cursor: 'pointer' }}>
+              {isCurrent && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 2, background: 'var(--accent)' }} />}
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
-                <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: isToday ? 'var(--accent)' : 'var(--fg-3)', fontWeight: 500 }}>{day.d}</span>
-                <span style={{ fontSize: 13, fontWeight: 500, color: isToday ? 'var(--fg-1)' : 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{day.date}</span>
+                <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: isCurrent ? 'var(--accent)' : 'var(--fg-3)', fontWeight: 500 }}>{dayNames[i]}</span>
+                <span style={{ fontSize: 13, fontWeight: 500, color: isCurrent ? 'var(--fg-1)' : 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{date.getDate()}</span>
               </div>
-              {day.zone ? (
-                <div style={{ padding: '8px 10px', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, borderLeft: `2px solid ${zColors[day.zone]}`, opacity: isDone ? 0.55 : 1 }}>
-                  <div style={{ fontSize: 12, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4, textDecoration: isDone ? 'line-through' : 'none' }}>{day.type}</div>
+
+              {zone && displayName ? (
+                <div style={{ padding: '8px 10px', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, borderLeft: `2px solid ${zColors[zone] ?? zColors.z2}`, opacity: isDone ? 0.55 : 1 }}>
+                  <div style={{ fontSize: 12, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4, textDecoration: isDone ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {displayName}
+                  </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-                    <span>{day.dur}</span><span>{day.tss} TSS</span>
+                    <span>{duration ?? '—'}</span>
+                    {tss != null && tss > 0 && <span>{Math.round(tss)} TSS</span>}
                   </div>
                 </div>
               ) : (
@@ -261,6 +508,8 @@ function WeekStrip() {
     </div>
   )
 }
+
+// ── MemoryInbox (unchanged) ───────────────────────────────────────────────────
 
 function MemoryInbox({ onNavigateToContext }: { onNavigateToContext: () => void }) {
   const items = [

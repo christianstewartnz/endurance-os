@@ -110,6 +110,10 @@ input, button, textarea, select {
   max-width: 1180px;
   margin: 0 auto;
 }
+.app-content > .inner.inner-full {
+  max-width: none;
+  margin: 0;
+}
 
 /* Top bar */
 .top-bar {

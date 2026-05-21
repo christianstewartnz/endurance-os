@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import AppShell from '@/components/app-shell'
 import SettingsView from '@/components/views/settings-view'
 
@@ -8,9 +9,23 @@ export default async function SettingsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  const admin = createAdminClient()
+  const { data: userData } = await admin
+    .from('users')
+    .select('intervals_athlete_id, intervals_api_key, last_intervals_sync, intervals_connection_invalid')
+    .eq('id', user.id)
+    .single()
+
+  const intervalsConnection = {
+    isConnected: !!(userData?.intervals_api_key && userData?.intervals_athlete_id),
+    athleteId: (userData?.intervals_athlete_id as string | null) ?? null,
+    lastSyncedAt: (userData?.last_intervals_sync as string | null) ?? null,
+    isInvalid: !!(userData?.intervals_connection_invalid),
+  }
+
   return (
     <AppShell>
-      <SettingsView />
+      <SettingsView intervalsConnection={intervalsConnection} />
     </AppShell>
   )
 }

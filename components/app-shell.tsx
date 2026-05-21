@@ -21,9 +21,10 @@ const ROUTE_NAMES: Record<string, string> = {
 
 interface AppShellProps {
   children: React.ReactNode
+  fullWidth?: boolean
 }
 
-export default function AppShell({ children }: AppShellProps) {
+export default function AppShell({ children, fullWidth = false }: AppShellProps) {
   const pathname = usePathname()
   const [coachOpen, setCoachOpen] = useState(true)
   const [cmdOpen, setCmdOpen] = useState(false)
@@ -82,7 +83,7 @@ export default function AppShell({ children }: AppShellProps) {
 
           {/* Page content */}
           <div className="app-content">
-            <div className="inner">{children}</div>
+            <div className={fullWidth ? 'inner inner-full' : 'inner'}>{children}</div>
           </div>
         </main>
 

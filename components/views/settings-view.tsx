@@ -3,7 +3,18 @@
 import { useState } from 'react'
 import { Icon, Button } from '@/components/atoms'
 
-export default function SettingsView() {
+interface IntervalsConnectionState {
+  isConnected: boolean
+  athleteId: string | null
+  lastSyncedAt: string | null
+  isInvalid: boolean
+}
+
+interface SettingsViewProps {
+  intervalsConnection?: IntervalsConnectionState
+}
+
+export default function SettingsView({ intervalsConnection }: SettingsViewProps) {
   const [section, setSection] = useState('ai')
   const sections = [
     { id: 'account',     label: 'Account',          icon: 'user' },
@@ -49,13 +60,236 @@ export default function SettingsView() {
           {section === 'coach'       && <CoachStylePanel />}
           {section === 'rules'       && <RulesPanel />}
           {section === 'account'     && <SimplePanel title="Account" items={[['Name','Mira Lindqvist'],['Email','mira@endurance.os'],['Discipline','Triathlon · Long course'],['Time zone','Europe/Helsinki · GMT+3']]} />}
-          {section === 'connections' && <SimplePanel title="Connections" items={[['Garmin Connect','Connected · 2m ago'],['TrainingPeaks','Not connected'],['Strava','Connected · 14m ago'],['Apple Health','Connected'],['intervals.icu','Not connected']]} />}
+          {section === 'connections' && <ConnectionsPanel intervals={intervalsConnection} />}
           {section === 'appearance'  && <SimplePanel title="Appearance" items={[['Theme','Graphite (dark)'],['Density','Comfortable'],['Accent','Electric lime'],['Font','Geist · default']]} />}
         </div>
       </div>
     </div>
   )
 }
+
+// ── Connections panel ────────────────────────────────────────────────────────
+
+function ConnectionsPanel({ intervals }: { intervals?: IntervalsConnectionState }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <IntervalsConnectionPanel initial={intervals} />
+      <SimpleConnectionRow label="Garmin Connect" status="Connected · 2m ago" />
+      <SimpleConnectionRow label="TrainingPeaks" status="Not connected" />
+      <SimpleConnectionRow label="Strava" status="Connected · 14m ago" />
+      <SimpleConnectionRow label="Apple Health" status="Connected" />
+    </div>
+  )
+}
+
+function SimpleConnectionRow({ label, status }: { label: string; status: string }) {
+  const connected = !status.startsWith('Not')
+  return (
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 12, color: connected ? 'var(--success)' : 'var(--fg-3)' }}>
+          {connected && <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--success)', marginRight: 6, verticalAlign: 'middle' }} />}
+          {status}
+        </span>
+        <Button kind="ghost" size="sm">{connected ? 'Disconnect' : 'Connect'}</Button>
+      </div>
+    </div>
+  )
+}
+
+function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionState }) {
+  const [state, setState] = useState({
+    isConnected: initial?.isConnected ?? false,
+    athleteId: initial?.athleteId ?? '',
+    lastSyncedAt: initial?.lastSyncedAt ?? null,
+    isInvalid: initial?.isInvalid ?? false,
+  })
+  const [apiKey, setApiKey] = useState('')
+  const [athleteIdInput, setAthleteIdInput] = useState(initial?.athleteId ?? '')
+  const [showForm, setShowForm] = useState(!initial?.isConnected)
+  const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  async function handleSave() {
+    if (!apiKey.trim() || !athleteIdInput.trim()) return
+    setSaving(true)
+    setErrorMsg(null)
+    try {
+      const res = await fetch('/api/intervals/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey, athlete_id: athleteIdInput }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setErrorMsg(data.error ?? 'Failed to connect')
+        return
+      }
+      setState({ isConnected: true, athleteId: athleteIdInput, lastSyncedAt: data.synced_at, isInvalid: false })
+      setApiKey('')
+      setShowForm(false)
+    } catch {
+      setErrorMsg('Network error — please try again')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    setErrorMsg(null)
+    try {
+      const res = await fetch('/api/intervals/sync', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        setErrorMsg(data.error ?? 'Sync failed')
+        return
+      }
+      setState((s) => ({ ...s, lastSyncedAt: data.synced_at }))
+    } catch {
+      setErrorMsg('Network error — please try again')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function handleDisconnect() {
+    await fetch('/api/intervals/connect', { method: 'DELETE' })
+    setState({ isConnected: false, athleteId: '', lastSyncedAt: null, isInvalid: false })
+    setAthleteIdInput('')
+    setShowForm(true)
+  }
+
+  function formatSyncTime(ts: string | null) {
+    if (!ts) return 'Never'
+    const d = new Date(ts)
+    const now = new Date()
+    const diffMs = now.getTime() - d.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours}h ago`
+    return d.toLocaleDateString()
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-2)', border: `1px solid ${state.isInvalid ? 'var(--danger)' : 'var(--border-default)'}`, borderRadius: 10, overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>intervals.icu</h2>
+            {state.isConnected && !state.isInvalid && (
+              <span style={{ fontSize: 11, color: 'var(--success)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--success)' }} />
+                Connected
+              </span>
+            )}
+            {state.isInvalid && (
+              <span style={{ fontSize: 11, color: 'var(--danger)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Icon name="alert-circle" size={11} />
+                Invalid credentials
+              </span>
+            )}
+            {!state.isConnected && !state.isInvalid && (
+              <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>Not connected</span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>
+            Wellness, activities, and training load sync automatically.
+          </div>
+        </div>
+        {state.isConnected && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button kind="secondary" size="sm" icon="refresh-cw" onClick={handleSync}>
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </Button>
+            <Button kind="ghost" size="sm" onClick={() => setShowForm((v) => !v)}>
+              {showForm ? 'Cancel' : 'Edit'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Connected status row */}
+      {state.isConnected && !showForm && (
+        <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+              Athlete ID: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-2)' }}>{state.athleteId}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 2 }}>
+              Last synced: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-2)' }}>{formatSyncTime(state.lastSyncedAt)}</span>
+            </div>
+          </div>
+          <Button kind="ghost" size="sm" icon="trash-2" onClick={handleDisconnect}>Disconnect</Button>
+        </div>
+      )}
+
+      {/* Form */}
+      {showForm && (
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 6 }}>
+              API Key
+            </label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={state.isConnected ? '••••••••••••••••' : 'Paste your Intervals.icu API key'}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'var(--bg-1)', border: '1px solid var(--border-default)',
+                borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)',
+                fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
+              }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 6 }}>
+              Athlete ID
+            </label>
+            <input
+              type="text"
+              value={athleteIdInput}
+              onChange={(e) => setAthleteIdInput(e.target.value)}
+              placeholder="e.g. i12345"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'var(--bg-1)', border: '1px solid var(--border-default)',
+                borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)',
+                fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
+              }}
+            />
+            <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 5 }}>
+              Found in Settings → About on intervals.icu
+            </div>
+          </div>
+          {errorMsg && (
+            <div style={{ fontSize: 12, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="alert-circle" size={12} />
+              {errorMsg}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button kind="primary" size="sm" onClick={handleSave}>
+              {saving ? 'Connecting…' : state.isConnected ? 'Update' : 'Connect & sync'}
+            </Button>
+            {state.isConnected && (
+              <Button kind="ghost" size="sm" onClick={() => setShowForm(false)}>Cancel</Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Existing panels (unchanged) ──────────────────────────────────────────────
 
 function AIModelPanel() {
   const models = [
