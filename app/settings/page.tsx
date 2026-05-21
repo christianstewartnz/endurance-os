@@ -12,7 +12,7 @@ export default async function SettingsPage() {
   const admin = createAdminClient()
   const { data: userData } = await admin
     .from('users')
-    .select('intervals_athlete_id, intervals_api_key, last_intervals_sync, intervals_connection_invalid')
+    .select('intervals_athlete_id, intervals_api_key, last_intervals_sync, intervals_connection_invalid, anthropic_api_key')
     .eq('id', user.id)
     .single()
 
@@ -23,9 +23,15 @@ export default async function SettingsPage() {
     isInvalid: !!(userData?.intervals_connection_invalid),
   }
 
+  const anthropicKey = (userData?.anthropic_api_key as string | null) ?? null
+  const anthropicKeyState = {
+    connected: !!anthropicKey,
+    last4: anthropicKey ? anthropicKey.slice(-4) : null,
+  }
+
   return (
     <AppShell>
-      <SettingsView intervalsConnection={intervalsConnection} />
+      <SettingsView intervalsConnection={intervalsConnection} anthropicKeyState={anthropicKeyState} />
     </AppShell>
   )
 }

@@ -1,82 +1,270 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Icon, Button, Kbd } from '@/components/atoms'
+import { useRouter } from 'next/navigation'
 
 interface Message {
+  id: string
   role: 'system' | 'ai' | 'user'
-  text: React.ReactNode
-  refs?: string[]
-  actions?: string[]
+  content: string
 }
 
-const INITIAL_MESSAGES: Message[] = [
-  {
-    role: 'system',
-    text: 'Tue, Jun 3 · 06:12 · Coach checked in.',
-  },
-  {
-    role: 'ai',
-    text: (
-      <>
-        HRV is{' '}
-        <span style={{ background: 'var(--accent-soft)', color: 'var(--accent)', padding: '1px 5px', borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-          64ms
-        </span>
-        , 8% under your 14-day baseline. Sleep was 6h 12m vs your 7h 30m target. You&apos;re trending under recovered.
-      </>
-    ),
-    refs: ['HRV', 'Sleep'],
-  },
-  {
-    role: 'ai',
-    text: (
-      <>
-        Today is threshold (4×8 @ 285 W, TSS 128). My recommendation: swap to{' '}
-        <span style={{ background: 'var(--accent-soft)', color: 'var(--accent)', padding: '1px 5px', borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-          90 min Z2
-        </span>
-        . Thu can absorb the threshold without disrupting Sat&apos;s long ride.
-      </>
-    ),
-    actions: ['Apply swap', 'Explain', 'Keep as planned'],
-  },
-]
+interface ContextSuggestion {
+  id: string
+  target_module: string
+  suggested_value: string
+  reasoning: string
+  evidence: string | null
+}
+
+interface InlineCard {
+  messageId: string
+  suggestion: ContextSuggestion
+  state: 'pending' | 'accepted' | 'rejected' | 'editing'
+  editValue: string
+}
+
+function uid(): string {
+  return Math.random().toString(36).slice(2)
+}
 
 interface CoachPanelProps {
   onClose: () => void
+  contextType?: 'general' | 'session_review' | 'session_creation' | 'injury'
+  sessionId?: string
+  initialMessage?: string
 }
 
-export default function CoachPanel({ onClose }: CoachPanelProps) {
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES)
+export default function CoachPanel({ onClose, contextType = 'general', sessionId, initialMessage }: CoachPanelProps) {
+  const router = useRouter()
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
-  const [typing, setTyping] = useState(false)
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [conversationId] = useState(() => uid())
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
+  const [loadedModules, setLoadedModules] = useState<string[]>([])
+  const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages, typing])
+    fetch('/api/keys/anthropic')
+      .then((r) => r.json())
+      .then((d) => {
+        setHasApiKey((d as { connected: boolean }).connected)
+        if ((d as { connected: boolean }).connected) {
+          // Pre-load context module labels
+          setLoadedModules(['@todayshrv', '@plandna', '@patterns'])
+        }
+      })
+      .catch(() => setHasApiKey(false))
+  }, [])
 
-  function send(text: string) {
-    if (!text.trim()) return
-    setMessages((m) => [...m, { role: 'user', text }])
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages, isStreaming, inlineCards])
+
+  // Auto-send initial message if provided (e.g. from session review trigger)
+  useEffect(() => {
+    if (initialMessage && hasApiKey) {
+      sendMessage(initialMessage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasApiKey])
+
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || isStreaming) return
+
+    const userMsgId = uid()
+    const aiMsgId = uid()
+
+    setMessages((prev) => [
+      ...prev,
+      { id: userMsgId, role: 'user', content: text },
+      { id: aiMsgId, role: 'ai', content: '' },
+    ])
     setInput('')
-    setTyping(true)
-    setTimeout(() => {
-      setTyping(false)
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'ai',
-          text: (
-            <>
-              Got it. I&apos;ll flag the long ride for Sat at{' '}
-              <span style={{ fontFamily: 'var(--font-mono)' }}>3h 30m / 195 TSS</span>. If HRV doesn&apos;t recover by Fri evening, I&apos;ll suggest shortening it to 2h 30m.
-            </>
-          ),
-        },
-      ])
-    }, 1200)
+    setIsStreaming(true)
+
+    const historyForApi = messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.content }))
+    historyForApi.push({ role: 'user', content: text })
+
+    const abort = new AbortController()
+    abortRef.current = abort
+
+    try {
+      const res = await fetch('/api/coach/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: historyForApi,
+          conversationId,
+          contextType,
+          sessionId,
+        }),
+        signal: abort.signal,
+      })
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({})) as { error?: string }
+        const errMsg = (() => {
+          switch (errData?.error) {
+            case 'no_api_key': return 'No API key connected. Please add your Anthropic key in Settings.'
+            case 'invalid_api_key': return 'API key is invalid. Please update it in Settings → API Keys.'
+            case 'rate_limited': return 'Too many requests — please wait a moment and try again.'
+            case 'network_error': return 'Could not reach Anthropic. Check your connection.'
+            default: return 'Something went wrong. Please try again.'
+          }
+        })()
+        setMessages((prev) =>
+          prev.map((m) => m.id === aiMsgId ? { ...m, content: errMsg } : m)
+        )
+        setIsStreaming(false)
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let fullText = ''
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6)
+          if (data === '[DONE]') continue
+          try {
+            const parsed = JSON.parse(data) as {
+              type?: string
+              delta?: { type?: string; text?: string }
+            }
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              fullText += parsed.delta.text ?? ''
+              setMessages((prev) =>
+                prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText } : m)
+              )
+            }
+          } catch {
+            // skip
+          }
+        }
+      }
+
+      // Strip context_update JSON from displayed message
+      const contextMatch = fullText.match(/\{"context_update":\s*\{[\s\S]*?\}\s*\}/)
+      if (contextMatch) {
+        const displayText = fullText.replace(contextMatch[0], '').trim()
+        setMessages((prev) =>
+          prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText } : m)
+        )
+        // Create inline suggestion card
+        try {
+          const parsed = JSON.parse(contextMatch[0]) as {
+            context_update: ContextSuggestion & { target_module: string; suggested_value: string; reasoning: string; evidence?: string }
+          }
+          // Fetch the pending suggestion ID from DB (the API route saved it)
+          const pendingRes = await fetch('/api/context/suggestions/pending')
+          const pendingData = await pendingRes.json() as { suggestions: Array<ContextSuggestion & { id: string }> }
+          const latest = pendingData.suggestions?.[0]
+          if (latest) {
+            setInlineCards((prev) => [
+              ...prev,
+              {
+                messageId: aiMsgId,
+                suggestion: latest,
+                state: 'pending',
+                editValue: latest.suggested_value,
+              },
+            ])
+          }
+          void parsed
+        } catch {
+          // skip
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return
+      setMessages((prev) =>
+        prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Connection error. Please retry.' } : m)
+      )
+    } finally {
+      setIsStreaming(false)
+      abortRef.current = null
+    }
+  }, [messages, isStreaming, conversationId, contextType, sessionId])
+
+  async function handleSuggestionAction(cardIdx: number, action: 'accept' | 'reject' | 'edit', editedValue?: string) {
+    const card = inlineCards[cardIdx]
+    if (!card) return
+
+    if (action === 'edit' && editedValue === undefined) {
+      setInlineCards((prev) => prev.map((c, i) => i === cardIdx ? { ...c, state: 'editing' } : c))
+      return
+    }
+
+    const res = await fetch(`/api/context/suggestions/${card.suggestion.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: editedValue ? 'edit' : action, editedValue }),
+    })
+
+    if (res.ok) {
+      setInlineCards((prev) =>
+        prev.map((c, i) => i === cardIdx ? { ...c, state: action === 'reject' ? 'rejected' : 'accepted' } : c)
+      )
+    }
+  }
+
+  const moduleLabel = loadedModules.join(' · ')
+
+  if (hasApiKey === false) {
+    return (
+      <aside style={{
+        width: 'var(--rightpanel-w)',
+        background: 'var(--bg-1)',
+        borderLeft: '1px solid var(--border-subtle)',
+        display: 'flex',
+        flexDirection: 'column',
+        flexShrink: 0,
+        height: '100%',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="sparkles" size={13} color="var(--ai)" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em' }}>Coach</div>
+          </div>
+          <Button kind="ghost" size="sm" icon="x" onClick={onClose} />
+        </div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', gap: 16 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="key" size={18} color="var(--ai)" />
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 6 }}>Connect your Anthropic API key</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.55, maxWidth: 240 }}>
+              Add your key in Settings to activate the AI Coach.
+            </div>
+          </div>
+          <Button kind="primary" size="sm" icon="key" onClick={() => router.push('/settings?section=keys')}>
+            Go to Settings → API Keys
+          </Button>
+        </div>
+      </aside>
+    )
   }
 
   return (
@@ -91,36 +279,49 @@ export default function CoachPanel({ onClose }: CoachPanelProps) {
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{
-          width: 24, height: 24, borderRadius: 6,
-          background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
+        <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="sparkles" size={13} color="var(--ai)" />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em' }}>Coach</div>
-          <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-            <span style={{ color: 'var(--ai)' }}>●</span> Reading:{' '}
-            <span style={{ fontFamily: 'var(--font-mono)' }}>@todayshrv · @plandna · @buildweek3</span>
-          </div>
+          {moduleLabel && (
+            <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+              <span style={{ color: 'var(--ai)' }}>●</span> Reading:{' '}
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{moduleLabel}</span>
+            </div>
+          )}
         </div>
-        <Button kind="ghost" size="sm" icon="more-horizontal" />
         <Button kind="ghost" size="sm" icon="x" onClick={onClose} />
-      </div>
-
-      {/* Context strip */}
-      <div style={{ display: 'flex', gap: 6, padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', flexWrap: 'wrap' }}>
-        {['@todayshrv', '@lastthresholdsession', '@plandna'].map((label) => (
-          <ContextChip key={label} label={label} />
-        ))}
-        <ContextChip label="+ add context" subtle />
       </div>
 
       {/* Messages */}
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {messages.map((m, i) => <ChatMessage key={i} m={m} />)}
-        {typing && <TypingDots />}
+        {messages.length === 0 && !isStreaming && hasApiKey && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, textAlign: 'center', color: 'var(--fg-3)', fontSize: 13 }}>
+            <Icon name="sparkles" size={20} color="var(--ai)" />
+            <span>Ask about today&apos;s session, this week, or anything in your training.</span>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={m.id}>
+            <ChatMessage m={m} isStreaming={isStreaming && i === messages.length - 1 && m.role === 'ai'} />
+            {inlineCards
+              .filter((c) => c.messageId === m.id)
+              .map((card, ci) => (
+                <SuggestionCard
+                  key={card.suggestion.id}
+                  card={card}
+                  onAction={(action, edited) => handleSuggestionAction(
+                    inlineCards.findIndex((c) => c.suggestion.id === card.suggestion.id),
+                    action,
+                    edited,
+                  )}
+                />
+              ))
+            }
+          </div>
+        ))}
+        {isStreaming && messages[messages.length - 1]?.content === '' && <TypingDots />}
       </div>
 
       {/* Composer */}
@@ -135,9 +336,10 @@ export default function CoachPanel({ onClose }: CoachPanelProps) {
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input) } }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
             placeholder="Ask about today's session, this week, or anything in your training…"
             rows={2}
+            disabled={isStreaming}
             style={{
               background: 'transparent', border: 'none', outline: 'none',
               resize: 'none', color: 'var(--fg-1)', fontFamily: 'inherit',
@@ -145,23 +347,21 @@ export default function CoachPanel({ onClose }: CoachPanelProps) {
             }}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-            <Button kind="ghost" size="sm" icon="paperclip" />
-            <Button kind="ghost" size="sm" icon="at-sign" />
             <span style={{ fontSize: 10, color: 'var(--fg-4)', marginLeft: 4 }}>@plan, @session, @week</span>
             <div style={{ flex: 1 }} />
             <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
               <Kbd>↵</Kbd> send
             </span>
             <button
-              onClick={() => send(input)}
-              disabled={!input.trim()}
+              onClick={() => sendMessage(input)}
+              disabled={!input.trim() || isStreaming}
               style={{
                 width: 24, height: 24, borderRadius: 6,
-                background: input.trim() ? 'var(--accent)' : 'var(--bg-3)',
-                color: input.trim() ? 'var(--accent-fg)' : 'var(--fg-4)',
+                background: input.trim() && !isStreaming ? 'var(--accent)' : 'var(--bg-3)',
+                color: input.trim() && !isStreaming ? 'var(--accent-fg)' : 'var(--fg-4)',
                 border: 'none',
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                cursor: input.trim() ? 'pointer' : 'not-allowed',
+                cursor: input.trim() && !isStreaming ? 'pointer' : 'not-allowed',
                 transition: 'background var(--dur-micro) var(--ease-out)',
               }}
             >
@@ -174,27 +374,12 @@ export default function CoachPanel({ onClose }: CoachPanelProps) {
   )
 }
 
-function ContextChip({ label, subtle }: { label: string; subtle?: boolean }) {
-  const isTag = label.startsWith('@')
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '3px 8px', borderRadius: 4,
-      fontSize: 11, fontFamily: 'var(--font-mono)',
-      background: subtle ? 'transparent' : (isTag ? 'var(--ai-soft)' : 'var(--bg-2)'),
-      border: `1px solid ${subtle ? 'var(--border-subtle)' : (isTag ? 'var(--ai-edge)' : 'var(--border-default)')}`,
-      color: subtle ? 'var(--fg-3)' : (isTag ? 'var(--ai)' : 'var(--fg-2)'),
-      cursor: 'pointer',
-    }}>{label}</span>
-  )
-}
-
-function ChatMessage({ m }: { m: Message }) {
+function ChatMessage({ m, isStreaming }: { m: Message; isStreaming: boolean }) {
   if (m.role === 'system') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px' }}>
         <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
-        <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{m.text}</span>
+        <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{m.content}</span>
         <div style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
       </div>
     )
@@ -205,8 +390,8 @@ function ChatMessage({ m }: { m: Message }) {
         <div style={{
           background: 'var(--bg-3)', border: '1px solid var(--border-default)',
           borderRadius: 10, padding: '10px 12px',
-          fontSize: 13, color: 'var(--fg-1)', maxWidth: '85%', lineHeight: 1.5,
-        }}>{m.text}</div>
+          fontSize: 13, color: 'var(--fg-1)', maxWidth: '85%', lineHeight: 1.5, whiteSpace: 'pre-wrap',
+        }}>{m.content}</div>
       </div>
     )
   }
@@ -221,17 +406,96 @@ function ChatMessage({ m }: { m: Message }) {
         <Icon name="sparkles" size={11} color="var(--ai)" />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)',
-          borderRadius: 10, padding: '10px 12px',
-          fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55,
-        }}>{m.text}</div>
-        {m.actions && (
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-            {m.actions.map((a, i) => (
-              <Button key={a} kind={i === 0 ? 'ai' : 'ghost'} size="sm">{a}</Button>
-            ))}
+        {m.content === '' && isStreaming ? (
+          <TypingDots />
+        ) : (
+          <div style={{
+            background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)',
+            borderRadius: 10, padding: '10px 12px',
+            fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap',
+          }}>
+            {m.content}
+            {isStreaming && <span style={{ opacity: 0.5, animation: 'blink 1s infinite' }}>▊</span>}
           </div>
+        )}
+      </div>
+      <style>{`@keyframes blink { 0%, 50% { opacity: 1 } 51%, 100% { opacity: 0 } }`}</style>
+    </div>
+  )
+}
+
+function SuggestionCard({ card, onAction }: {
+  card: InlineCard
+  onAction: (action: 'accept' | 'reject' | 'edit', editedValue?: string) => void
+}) {
+  const [editVal, setEditVal] = useState(card.editValue)
+
+  if (card.state === 'accepted') {
+    return (
+      <div style={{ marginTop: 8, padding: '8px 12px', fontSize: 12, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Icon name="check" size={12} />
+        Context update accepted.
+      </div>
+    )
+  }
+  if (card.state === 'rejected') {
+    return (
+      <div style={{ marginTop: 8, padding: '8px 12px', fontSize: 12, color: 'var(--fg-4)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Icon name="x" size={12} />
+        Suggestion rejected.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{
+      marginTop: 8,
+      border: '1px solid var(--ai-edge)',
+      background: 'rgba(139,124,246,0.04)',
+      borderRadius: 8,
+      padding: '12px 14px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <Icon name="sparkles" size={11} color="var(--ai)" />
+        <span style={{ fontSize: 11, color: 'var(--ai)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          Suggested update → <span style={{ fontFamily: 'var(--font-mono)' }}>@{card.suggestion.target_module.replace('_', '')}</span>
+        </span>
+      </div>
+      {card.state === 'editing' ? (
+        <textarea
+          value={editVal}
+          onChange={(e) => setEditVal(e.target.value)}
+          rows={3}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            background: 'var(--bg-1)', border: '1px solid var(--border-default)',
+            borderRadius: 5, padding: '6px 8px', color: 'var(--fg-1)',
+            fontFamily: 'inherit', fontSize: 12, lineHeight: 1.5,
+            resize: 'vertical', outline: 'none', marginBottom: 8,
+          }}
+        />
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5, marginBottom: 4 }}>
+          {card.suggestion.suggested_value}
+        </div>
+      )}
+      {card.suggestion.evidence && (
+        <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+          Evidence: {card.suggestion.evidence}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        {card.state === 'editing' ? (
+          <>
+            <Button kind="ai" size="sm" icon="check" onClick={() => onAction('edit', editVal)}>Save</Button>
+            <Button kind="ghost" size="sm" onClick={() => onAction('accept')}>Cancel</Button>
+          </>
+        ) : (
+          <>
+            <Button kind="ai" size="sm" icon="check" onClick={() => onAction('accept')}>Accept</Button>
+            <Button kind="ghost" size="sm" icon="pencil-line" onClick={() => onAction('edit')}>Edit</Button>
+            <Button kind="ghost" size="sm" icon="x" onClick={() => onAction('reject')}>Reject</Button>
+          </>
         )}
       </div>
     </div>

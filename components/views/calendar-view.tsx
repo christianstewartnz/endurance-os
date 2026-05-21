@@ -526,9 +526,11 @@ function SessionCard({ session, isSelected, onClick }: {
       style={{
         padding: '6px 8px',
         background: 'var(--bg-1)',
-        border: `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderTop:    `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderRight:  `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderBottom: `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderLeft:   `2px solid ${sportColor}`,
         borderRadius: 5,
-        borderLeft: `2px solid ${sportColor}`,
         cursor: 'pointer',
         width: '100%',
         boxSizing: 'border-box',

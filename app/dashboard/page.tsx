@@ -98,6 +98,9 @@ export default async function DashboardPage() {
 
   const hasIntervalsConnected = !!(userData?.intervals_api_key && userData?.intervals_athlete_id)
 
+  const todayEvent = weekEvents.find((e) => e.start_date_local.startsWith(today)) ?? null
+  const todaySession = ((weekSessions ?? []) as SessionNoteRow[]).find((s) => s.session_date === today) ?? null
+
   return (
     <AppShell>
       <DashboardView
@@ -106,6 +109,8 @@ export default async function DashboardPage() {
         weekSessions={(weekSessions ?? []) as SessionNoteRow[]}
         weekEvents={weekEvents}
         hasIntervalsConnected={hasIntervalsConnected}
+        todayEvent={todayEvent}
+        todaySession={todaySession}
       />
     </AppShell>
   )

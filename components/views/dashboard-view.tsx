@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Icon, Button, Pill, Sparkline } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
@@ -14,6 +14,8 @@ interface DashboardProps {
   weekSessions: SessionNoteRow[]
   weekEvents: IntervalEvent[]
   hasIntervalsConnected: boolean
+  todayEvent?: IntervalEvent | null
+  todaySession?: SessionNoteRow | null
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -59,9 +61,13 @@ export default function DashboardView({
   weekSessions,
   weekEvents,
   hasIntervalsConnected,
+  todayEvent,
+  todaySession,
 }: DashboardProps) {
   const router = useRouter()
   const { openCoach } = useCoachPanel()
+  const [showSessionModal, setShowSessionModal] = useState(false)
+  const [sessionCreated, setSessionCreated] = useState(false)
 
   // Build header subtitle from real HRV data if available
   const headerSubtitle = (() => {
@@ -97,7 +103,19 @@ export default function DashboardView({
         </div>
       </div>
 
-      <TodaysSessionCard onOpenCoach={openCoach} />
+      <TodaysSessionCard
+        onOpenCoach={openCoach}
+        todayEvent={todayEvent}
+        todaySession={todaySession}
+        onCreateSession={() => setShowSessionModal(true)}
+        sessionCreated={sessionCreated}
+      />
+      {showSessionModal && (
+        <SessionCreationModal
+          onClose={() => setShowSessionModal(false)}
+          onSessionAdded={() => { setSessionCreated(true); setShowSessionModal(false) }}
+        />
+      )}
       <ReadinessRow
         wellnessToday={wellnessToday}
         wellness14d={wellness14d}
@@ -110,139 +128,463 @@ export default function DashboardView({
   )
 }
 
-// ── TodaysSessionCard (unchanged logic) ──────────────────────────────────────
+// ── TodaysSessionCard — 3 states ─────────────────────────────────────────────
 
-function TodaysSessionCard({ onOpenCoach }: { onOpenCoach: () => void }) {
-  const [adaptation, setAdaptation] = useState<'pending' | 'accepted' | 'rejected'>('pending')
-  const accepted = adaptation === 'accepted'
+interface TodaysSessionCardProps {
+  onOpenCoach: () => void
+  todayEvent?: IntervalEvent | null
+  todaySession?: SessionNoteRow | null
+  onCreateSession: () => void
+  sessionCreated: boolean
+}
 
-  const stats = accepted
-    ? [['Duration', '1:30', 'h:mm'], ['Target IF', '0.68', ''], ['TSS', '62', ''], ['Start', '06:30', 'Tue']]
-    : [['Duration', '1:42', 'h:mm'], ['Target IF', '0.94', ''], ['TSS', '128', ''], ['Start', '06:30', 'Tue']]
+function TodaysSessionCard({ onOpenCoach, todayEvent, todaySession, onCreateSession, sessionCreated }: TodaysSessionCardProps) {
+  const [markingRest, setMarkingRest] = useState(false)
+  const [markedRest, setMarkedRest] = useState(false)
 
-  return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: 24, display: 'grid', gridTemplateColumns: '1fr 280px', gap: 32 }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-            <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Today&apos;s session</div>
-            <Pill color="z4">Z4 · Threshold</Pill>
-            {accepted && <Pill color="ai"><Icon name="sparkles" size={10} style={{ marginRight: 2 }} />Adapted to Z2</Pill>}
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', lineHeight: 1.15, color: 'var(--fg-1)' }}>
-            {accepted ? 'Endurance · 90 min Z2' : 'Threshold intervals · 4 × 8 min'}
-          </div>
-          <div style={{ fontSize: 14, color: 'var(--fg-2)', marginTop: 8, lineHeight: 1.55, maxWidth: 520 }}>
-            {accepted ? (
-              <>Steady at <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>180–210 W</span> · cadence <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>88–92</span>. Threshold moves to Thursday.</>
-            ) : (
-              <>Hold <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>285 W</span> · cadence <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)' }}>92</span>. 4 min easy between. Wind 6 m/s SW — bias the steady direction for the long efforts.</>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 28, marginTop: 24 }}>
-            {stats.map(([k, v, u]) => (
-              <div key={k}>
-                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>{k}</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 500, color: 'var(--fg-1)', letterSpacing: '-0.01em', marginTop: 4, lineHeight: 1 }}>
-                  {v}{u && <span style={{ fontSize: 11, color: 'var(--fg-3)', marginLeft: 4 }}>{u}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 24 }}>
-            <Button kind="primary" size="md" icon="play">Start session</Button>
-            <Button kind="secondary" size="md" icon="pencil-line">Edit</Button>
-            <Button kind="ghost" size="md" icon="sparkles" onClick={onOpenCoach}>Discuss</Button>
-            <Button kind="ghost" size="md" iconRight="chevron-down" style={{ marginLeft: 'auto' }}>More</Button>
-          </div>
+  async function handleMarkRest() {
+    setMarkingRest(true)
+    try {
+      const today = new Date().toISOString().split('T')[0]
+      await fetch('/api/intervals/rest-day', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: today }),
+      })
+      setMarkedRest(true)
+    } catch {
+      // non-fatal
+    } finally {
+      setMarkingRest(false)
+    }
+  }
+
+  // State 3: Session completed today (synced from Garmin)
+  if (todaySession) {
+    const dur = todaySession.actual_duration_seconds
+      ? (() => {
+          const s = todaySession.actual_duration_seconds
+          const h = Math.floor(s / 3600)
+          const m = Math.floor((s % 3600) / 60)
+          return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}min`
+        })()
+      : '—'
+    return (
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Today&apos;s session</div>
+          <Pill color="success">Completed</Pill>
         </div>
-        <div style={{ background: 'var(--bg-1)', border: '1px solid var(--border-subtle)', borderRadius: 8, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Profile</span>
-            <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>W / time</span>
+        <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--fg-1)', marginBottom: 16 }}>
+          {todaySession.session_type ?? 'Workout'}
+        </div>
+        <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
+          {[
+            ['Duration', dur, ''],
+            ['TSS', todaySession.actual_tss != null ? String(todaySession.actual_tss) : '—', ''],
+            ['Avg HR', todaySession.avg_hr != null ? String(todaySession.avg_hr) : '—', 'bpm'],
+            ['Avg Power', todaySession.avg_power_watts != null ? String(todaySession.avg_power_watts) : '—', 'W'],
+          ].map(([k, v, u]) => (
+            <div key={k}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>{k}</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 500, color: 'var(--fg-1)', letterSpacing: '-0.01em', marginTop: 4, lineHeight: 1 }}>
+                {v}{u && <span style={{ fontSize: 11, color: 'var(--fg-3)', marginLeft: 4 }}>{u}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <Button kind="ai" size="md" icon="sparkles" onClick={onOpenCoach}>Review with Coach</Button>
+      </div>
+    )
+  }
+
+  // State 2: Session planned (from Intervals or AI generated)
+  if ((todayEvent || sessionCreated) && !markedRest) {
+    const event = todayEvent
+    const name = event?.name ?? 'Session planned'
+    const tss = event?.icu_training_load ?? null
+    const zone = event ? getZoneFromName(event.name) : 'z2'
+    const zoneLabel = { z1: 'Z1', z2: 'Z2', z3: 'Z3', z4: 'Z4 · Threshold', z5: 'Z5 · VO2' }[zone] ?? 'Z2'
+
+    return (
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Today&apos;s session</div>
+          <Pill color={zone as 'z4'}>{zoneLabel}</Pill>
+        </div>
+        <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--fg-1)', marginBottom: 8 }}>{name}</div>
+        {tss != null && (
+          <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
+            <div>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>TSS</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 500, color: 'var(--fg-1)', marginTop: 4, lineHeight: 1 }}>{tss}</div>
+            </div>
           </div>
-          {accepted ? <Z2Profile /> : <WorkoutProfile />}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-            <span>0:00</span><span>0:30</span><span>1:00</span>
-            <span>{accepted ? '1:30' : '1:42'}</span>
-          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button kind="secondary" size="md" icon="pencil-line">Edit</Button>
+          <Button kind="ghost" size="md" icon="sparkles" onClick={onOpenCoach}>Discuss</Button>
         </div>
       </div>
+    )
+  }
 
-      {adaptation === 'pending' && (
-        <AdaptationSuggestion
-          onAccept={() => setAdaptation('accepted')}
-          onReject={() => setAdaptation('rejected')}
-          onDiscuss={onOpenCoach}
-        />
+  // State 1: No session planned
+  return (
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 12 }}>
+      {markedRest ? (
+        <>
+          <Icon name="moon" size={24} color="var(--fg-3)" />
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 4 }}>Rest day logged</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Intentional rest is part of the plan.</div>
+          </div>
+        </>
+      ) : (
+        <>
+          <Icon name="calendar" size={24} color="var(--fg-3)" />
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 4 }}>No session planned today</div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Rest intentionally or create a session with your coach.</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button kind="ai" size="md" icon="sparkles" onClick={onCreateSession}>Create session</Button>
+            <Button kind="ghost" size="md" icon="moon" onClick={handleMarkRest}>
+              {markingRest ? 'Marking…' : 'Mark as rest day'}
+            </Button>
+          </div>
+        </>
       )}
-      {adaptation === 'rejected' && (
-        <div style={{ padding: '12px 24px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-1)', fontSize: 12, color: 'var(--fg-3)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Icon name="check" size={12} />
-          Suggestion declined. Keeping threshold as planned.
-          <button onClick={() => setAdaptation('pending')} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'var(--fg-3)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}>
-            Show again
+    </div>
+  )
+}
+
+// ── SessionCreationModal ─────────────────────────────────────────────────────
+
+interface SessionProposal {
+  name: string
+  type: string
+  sport: string
+  description: string
+  duration_seconds: number
+  estimated_tss: number
+  intervals_format: string
+}
+
+interface SessionCreationModalProps {
+  onClose: () => void
+  onSessionAdded: () => void
+}
+
+const SUGGESTED_PROMPTS = [
+  'What do you recommend for today?',
+  'I want to do VO2 intervals',
+  'I need an easy recovery session',
+  'I have 45 minutes — what fits?',
+]
+
+function uid(): string {
+  return Math.random().toString(36).slice(2)
+}
+
+interface ModalMessage {
+  id: string
+  role: 'user' | 'ai'
+  content: string
+  proposal?: SessionProposal
+}
+
+function SessionCreationModal({ onClose, onSessionAdded }: SessionCreationModalProps) {
+  const [messages, setMessages] = useState<ModalMessage[]>([])
+  const [input, setInput] = useState('')
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [addingSession, setAddingSession] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [messages, isStreaming])
+
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || isStreaming) return
+    const userMsgId = uid()
+    const aiMsgId = uid()
+    setMessages((prev) => [
+      ...prev,
+      { id: userMsgId, role: 'user', content: text },
+      { id: aiMsgId, role: 'ai', content: '' },
+    ])
+    setInput('')
+    setIsStreaming(true)
+
+    const history = messages
+      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user' as 'user' | 'assistant', content: m.content }))
+    history.push({ role: 'user', content: text })
+
+    try {
+      const res = await fetch('/api/coach/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: history, contextType: 'session_creation' }),
+      })
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({})) as { error?: string }
+        const msg = errData.error === 'no_api_key'
+          ? 'Connect your Anthropic API key in Settings to activate the Coach.'
+          : 'Something went wrong. Please try again.'
+        setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: msg } : m))
+        setIsStreaming(false)
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let fullText = ''
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6)
+          if (data === '[DONE]') continue
+          try {
+            const parsed = JSON.parse(data) as { type?: string; delta?: { type?: string; text?: string } }
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              fullText += parsed.delta.text ?? ''
+              setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText } : m))
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      // Extract session_proposal JSON from response
+      const proposalMatch = fullText.match(/\{"session_proposal":\s*\{[\s\S]*?\}\s*\}/)
+      let proposal: SessionProposal | undefined
+      if (proposalMatch) {
+        try {
+          const parsed = JSON.parse(proposalMatch[0]) as { session_proposal: SessionProposal }
+          proposal = parsed.session_proposal
+          const displayText = fullText.replace(proposalMatch[0], '').trim()
+          setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText, proposal } : m))
+        } catch { /* skip */ }
+      }
+    } catch {
+      setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Connection error. Please retry.' } : m))
+    } finally {
+      setIsStreaming(false)
+    }
+  }, [messages, isStreaming])
+
+  async function handleAddToToday(proposal: SessionProposal) {
+    setAddingSession(true)
+    try {
+      const today = new Date().toISOString().split('T')[0]
+      await fetch('/api/coach/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposal, date: today }),
+      })
+      onSessionAdded()
+    } catch {
+      setAddingSession(false)
+    }
+  }
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.65)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000,
+        animation: 'fadeIn 150ms ease-out',
+      }}
+    >
+      <style>{`@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }`}</style>
+      <div style={{
+        width: 700, maxHeight: '85vh',
+        background: 'var(--bg-1)',
+        border: '1px solid var(--border-default)',
+        borderRadius: 14,
+        display: 'flex', flexDirection: 'column',
+        overflow: 'hidden',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+      }}>
+        {/* Header */}
+        <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <div style={{ width: 22, height: 22, borderRadius: 5, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name="sparkles" size={11} color="var(--ai)" />
+              </div>
+              <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--fg-1)' }}>Create today&apos;s session</span>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Tell me what you want to do, or ask what I recommend.</div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: 'var(--fg-3)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <Icon name="x" size={18} />
           </button>
         </div>
+
+        {/* Messages */}
+        <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {messages.length === 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-4)', textAlign: 'center', marginBottom: 4 }}>Suggested</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                {SUGGESTED_PROMPTS.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => sendMessage(p)}
+                    style={{
+                      padding: '8px 14px', borderRadius: 20,
+                      background: 'var(--bg-2)', border: '1px solid var(--border-default)',
+                      color: 'var(--fg-2)', fontSize: 13, cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((m, i) => (
+            <div key={m.id}>
+              {m.role === 'user' ? (
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <div style={{ background: 'var(--bg-3)', border: '1px solid var(--border-default)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: 'var(--fg-1)', maxWidth: '80%', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                    {m.content}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                  <div style={{ width: 22, height: 22, borderRadius: 5, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                    <Icon name="sparkles" size={11} color="var(--ai)" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {m.content === '' && isStreaming && i === messages.length - 1 ? (
+                      <ModalTypingDots />
+                    ) : (
+                      <>
+                        <div style={{ background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                          {(() => { const idx = m.content.indexOf('{"session_proposal"'); return idx >= 0 ? m.content.slice(0, idx).trim() : m.content })()}
+                          {isStreaming && i === messages.length - 1 && <span style={{ opacity: 0.5 }}>▊</span>}
+                        </div>
+                        {m.proposal && (
+                          <SessionProposalCard
+                            proposal={m.proposal}
+                            onAdd={() => handleAddToToday(m.proposal!)}
+                            onDecline={() => setMessages((prev) => prev.map((msg) => msg.id === m.id ? { ...msg, proposal: undefined } : msg))}
+                            adding={addingSession}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Composer */}
+        <div style={{ padding: '12px 16px 16px', borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: '10px 12px' }}>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
+              placeholder="Ask about today's session, or describe what you want to do…"
+              rows={2}
+              disabled={isStreaming}
+              style={{ background: 'transparent', border: 'none', outline: 'none', resize: 'none', color: 'var(--fg-1)', fontFamily: 'inherit', fontSize: 13, lineHeight: 1.5, padding: 0 }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
+              <div style={{ flex: 1 }} />
+              <button
+                onClick={() => sendMessage(input)}
+                disabled={!input.trim() || isStreaming}
+                style={{
+                  width: 28, height: 28, borderRadius: 7,
+                  background: input.trim() && !isStreaming ? 'var(--accent)' : 'var(--bg-3)',
+                  color: input.trim() && !isStreaming ? 'var(--accent-fg)' : 'var(--fg-4)',
+                  border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: input.trim() && !isStreaming ? 'pointer' : 'not-allowed',
+                }}
+              >
+                <Icon name="arrow-up" size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SessionProposalCard({ proposal, onAdd, onDecline, adding }: {
+  proposal: SessionProposal
+  onAdd: () => void
+  onDecline: () => void
+  adding: boolean
+}) {
+  const dur = proposal.duration_seconds
+    ? (() => {
+        const h = Math.floor(proposal.duration_seconds / 3600)
+        const m = Math.floor((proposal.duration_seconds % 3600) / 60)
+        return h > 0 ? `~${h}h ${m}min` : `~${m}min`
+      })()
+    : '—'
+
+  return (
+    <div style={{ marginTop: 10, border: '1px solid var(--border-default)', background: 'var(--bg-2)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 6 }}>Session Proposal</div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 4 }}>{proposal.name}</div>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+          {proposal.sport} · {dur}{proposal.estimated_tss ? ` · Est. TSS ${proposal.estimated_tss}` : ''}
+        </div>
+      </div>
+      {proposal.description && (
+        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+          {proposal.description}
+        </div>
       )}
-    </div>
-  )
-}
-
-function AdaptationSuggestion({ onAccept, onReject, onDiscuss }: { onAccept: () => void; onReject: () => void; onDiscuss: () => void }) {
-  return (
-    <div style={{ borderTop: '1px solid var(--ai-edge)', background: 'linear-gradient(180deg, rgba(139,124,246,0.05), rgba(139,124,246,0.02))', padding: '16px 24px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-      <div style={{ width: 24, height: 24, borderRadius: 6, flexShrink: 0, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
-        <Icon name="sparkles" size={12} color="var(--ai)" />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ai)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Adaptation proposed</span>
-          <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>06:12 · auto</span>
-        </div>
-        <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, marginBottom: 4 }}>
-          HRV <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--ai)' }}>−8%</span> vs 14-day baseline and yesterday&apos;s threshold session created unusually high cardiac drift. Swap to <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-1)', background: 'var(--ai-soft)', padding: '0 4px', borderRadius: 3 }}>90 min Z2</span>; move threshold to Thursday.
-        </div>
-        <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', marginBottom: 12 }}>
-          <span>Reading <span style={{ color: 'var(--ai)' }}>@todayshrv</span></span>
-          <span>·</span>
-          <span><span style={{ color: 'var(--ai)' }}>@lastthresholdsession</span></span>
-          <span>·</span>
-          <span><span style={{ color: 'var(--ai)' }}>@plandna</span></span>
-        </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <Button kind="ai" size="sm" icon="check" onClick={onAccept}>Accept</Button>
-          <Button kind="ghost" size="sm" icon="pencil-line">Modify</Button>
-          <Button kind="ghost" size="sm" icon="x" onClick={onReject}>Reject</Button>
-          <Button kind="ghost" size="sm" icon="message-square" onClick={onDiscuss}>Discuss with AI</Button>
-        </div>
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 8 }}>
+        <Button kind="ai" size="sm" icon="check" onClick={onAdd}>
+          {adding ? 'Adding…' : '✓ Add to today'}
+        </Button>
+        <Button kind="ghost" size="sm" icon="x" onClick={onDecline}>Decline</Button>
       </div>
     </div>
   )
 }
 
-function Z2Profile() {
+function ModalTypingDots() {
   return (
-    <div style={{ height: 120, display: 'flex', alignItems: 'flex-end', gap: 1 }}>
-      {[{ w: 10, p: 0.35 }, { w: 70, p: 0.62 }, { w: 8, p: 0.30 }].map((b, i) => (
-        <div key={i} style={{ flex: b.w, height: `${b.p * 100}%`, background: 'linear-gradient(180deg, #3FB37F55, #3FB37Faa)', borderTop: '2px solid #3FB37F', borderRadius: '2px 2px 0 0' }} />
+    <div style={{ display: 'flex', gap: 4, padding: '8px 14px', background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)', borderRadius: 10, width: 'fit-content' }}>
+      {[0, 1, 2].map((i) => (
+        <span key={i} style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ai)', animation: `dotPulse 1s ${i * 0.16}s infinite ease-in-out` }} />
       ))}
-    </div>
-  )
-}
-
-function WorkoutProfile() {
-  const blocks = [
-    { w: 12, p: 0.38, z: 'z2' }, { w: 16, p: 0.95, z: 'z4' }, { w: 8, p: 0.45, z: 'z2' },
-    { w: 16, p: 0.95, z: 'z4' }, { w: 8, p: 0.45, z: 'z2' }, { w: 16, p: 0.95, z: 'z4' },
-    { w: 8, p: 0.45, z: 'z2' }, { w: 16, p: 0.95, z: 'z4' }, { w: 10, p: 0.35, z: 'z2' },
-  ]
-  const colors: Record<string, string> = { z2: '#3FB37F', z3: '#E8C547', z4: '#E89B3C', z5: '#E5484D' }
-  return (
-    <div style={{ height: 120, display: 'flex', alignItems: 'flex-end', gap: 1 }}>
-      {blocks.map((b, i) => (
-        <div key={i} style={{ flex: b.w, height: `${b.p * 100}%`, background: `linear-gradient(180deg, ${colors[b.z]}55, ${colors[b.z]}aa)`, borderTop: `2px solid ${colors[b.z]}`, borderRadius: '2px 2px 0 0' }} />
-      ))}
+      <style>{`@keyframes dotPulse { 0%, 60%, 100% { opacity: 0.3 } 30% { opacity: 1 } }`}</style>
     </div>
   )
 }

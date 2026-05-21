@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Icon, Button } from '@/components/atoms'
 
 interface IntervalsConnectionState {
@@ -10,11 +10,17 @@ interface IntervalsConnectionState {
   isInvalid: boolean
 }
 
-interface SettingsViewProps {
-  intervalsConnection?: IntervalsConnectionState
+interface AnthropicKeyState {
+  connected: boolean
+  last4: string | null
 }
 
-export default function SettingsView({ intervalsConnection }: SettingsViewProps) {
+interface SettingsViewProps {
+  intervalsConnection?: IntervalsConnectionState
+  anthropicKeyState?: AnthropicKeyState
+}
+
+export default function SettingsView({ intervalsConnection, anthropicKeyState }: SettingsViewProps) {
   const [section, setSection] = useState('ai')
   const sections = [
     { id: 'account',     label: 'Account',          icon: 'user' },
@@ -56,7 +62,7 @@ export default function SettingsView({ intervalsConnection }: SettingsViewProps)
 
         <div>
           {section === 'ai'          && <AIModelPanel />}
-          {section === 'keys'        && <APIKeysPanel />}
+          {section === 'keys'        && <APIKeysPanel initial={anthropicKeyState} />}
           {section === 'coach'       && <CoachStylePanel />}
           {section === 'rules'       && <RulesPanel />}
           {section === 'account'     && <SimplePanel title="Account" items={[['Name','Mira Lindqvist'],['Email','mira@endurance.os'],['Discipline','Triathlon · Long course'],['Time zone','Europe/Helsinki · GMT+3']]} />}
@@ -327,35 +333,130 @@ function AIModelPanel() {
   )
 }
 
-function APIKeysPanel() {
-  const keys = [
-    { provider: 'Anthropic',             key: 'sk-ant-•••••••••••••3f2a',        status: 'Verified',   added: '14 days ago' },
-    { provider: 'OpenAI',                key: 'sk-•••••••••••••a91c',             status: 'Verified',   added: '14 days ago' },
-    { provider: 'Custom · self-hosted',  key: 'https://endurance.local:11434',    status: 'Reachable',  added: '4 days ago' },
-  ]
+function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
+  const [keyState, setKeyState] = useState<AnthropicKeyState>(
+    initial ?? { connected: false, last4: null }
+  )
+  const [keyInput, setKeyInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!initial) {
+      fetch('/api/keys/anthropic')
+        .then((r) => r.json())
+        .then((d) => setKeyState({ connected: d.connected, last4: d.last4 }))
+        .catch(() => {})
+    }
+  }, [initial])
+
+  async function handleConnect() {
+    if (!keyInput.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/keys/anthropic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: keyInput.trim() }),
+      })
+      const data = await res.json() as { success: boolean; error?: string; last4?: string }
+      if (!data.success) {
+        setError(data.error ?? 'Failed to connect key')
+        return
+      }
+      setKeyState({ connected: true, last4: data.last4 ?? null })
+      setKeyInput('')
+    } catch {
+      setError('Network error — please try again')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleRemove() {
+    setRemoving(true)
+    setError(null)
+    try {
+      await fetch('/api/keys/anthropic', { method: 'DELETE' })
+      setKeyState({ connected: false, last4: null })
+    } catch {
+      setError('Network error — please try again')
+    } finally {
+      setRemoving(false)
+    }
+  }
+
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>API keys</h2>
-        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Keys stay on this device. Never transmitted to Endurance.OS servers.</div>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Bring your own API key to power the AI Coach.</div>
       </div>
-      {keys.map((k, i) => (
-        <div key={i} style={{ padding: '14px 20px', borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none', display: 'flex', alignItems: 'center', gap: 14 }}>
+
+      {/* Anthropic section */}
+      <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <div style={{ width: 20, height: 20, borderRadius: 5, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="sparkles" size={11} color="var(--ai)" />
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>Anthropic</span>
+          {keyState.connected && (
+            <span style={{ fontSize: 11, color: 'var(--success)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--success)' }} />
+              Connected · sk-ant-••••{keyState.last4}
+            </span>
+          )}
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.55, marginBottom: 14, maxWidth: 480 }}>
+          Your API key is stored securely and never shared. All AI conversations are billed directly to your Anthropic account.
+        </div>
+
+        {keyState.connected ? (
+          <Button kind="ghost" size="sm" icon="trash-2" onClick={handleRemove}>
+            {removing ? 'Removing…' : 'Remove key'}
+          </Button>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420 }}>
+            <input
+              type="password"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
+              placeholder="sk-ant-…"
+              style={{
+                background: 'var(--bg-1)', border: '1px solid var(--border-default)',
+                borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)',
+                fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
+              }}
+            />
+            {error && (
+              <div style={{ fontSize: 12, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Icon name="alert-circle" size={12} />
+                {error}
+              </div>
+            )}
+            <div>
+              <Button kind="primary" size="sm" onClick={handleConnect}>
+                {saving ? 'Verifying…' : 'Connect'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Remaining placeholder rows */}
+      {[{ provider: 'OpenAI', note: 'Optional — for future model switching' }].map((k) => (
+        <div key={k.provider} style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{k.provider}</div>
-            <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{k.key}</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>{k.note}</div>
           </div>
-          <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--success)' }}>
-            <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--success)', marginRight: 5, verticalAlign: 'middle' }} />
-            {k.status}
-          </span>
-          <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>{k.added}</span>
-          <Button kind="ghost" size="sm" icon="trash-2" />
+          <Button kind="ghost" size="sm">Connect</Button>
         </div>
       ))}
-      <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)' }}>
-        <Button kind="secondary" size="sm" icon="plus">Add key</Button>
-      </div>
     </div>
   )
 }
