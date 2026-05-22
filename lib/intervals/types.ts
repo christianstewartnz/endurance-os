@@ -18,15 +18,42 @@ export interface IntervalActivity {
   name: string
   moving_time: number
   elapsed_time: number
+  // Power
   average_watts: number
   weighted_average_watts: number
+  max_watts: number
+  // HR
   average_heartrate: number
   max_heartrate: number
+  cardiac_drift_percent: number
+  // ICU metrics
   icu_training_load: number
   icu_atl: number
   icu_ctl: number
   icu_tsb: number
-  cardiac_drift_percent: number
+  icu_intensity: number
+  icu_variability: number
+  icu_efficiency_factor: number
+  icu_aerobic_decoupling: number
+  icu_hrss: number
+  icu_zones: unknown[]
+  icu_gaps: unknown[]
+  // Movement
+  distance: number
+  total_elevation_gain: number
+  average_speed: number // m/s
+  max_speed: number // m/s
+  average_cadence: number
+  // Other
+  calories: number
+  average_temp: number
+  total_work: number // joules
+}
+
+export interface IntervalActivityDetail {
+  id: string
+  icu_groups?: unknown[]
+  [key: string]: unknown
 }
 
 export interface SportSettings {
@@ -77,15 +104,44 @@ export interface SessionNoteRow {
   session_date: string
   session_type: string | null
   sport: string | null
+  // Core metrics
   actual_tss: number | null
   actual_duration_seconds: number | null
-  avg_power_watts: number | null
-  normalized_power_watts: number | null
   avg_hr: number | null
   max_hr: number | null
   cardiac_drift_percent: number | null
   is_archived: boolean
-  // Extended fields — present once DB columns are added
+  // Power
+  avg_power_watts: number | null
+  normalized_power_watts: number | null
+  max_power_watts: number | null
+  total_work_kj: number | null
+  best_20min_power: number | null
+  best_60min_power: number | null
+  // Training metrics
+  intensity_factor: number | null
+  variability_index: number | null
+  efficiency_factor: number | null
+  aerobic_decoupling: number | null
+  hrss: number | null
+  // Movement
+  distance_meters: number | null
+  elevation_gain_meters: number | null
+  min_elevation: number | null
+  max_elevation: number | null
+  avg_speed_kph: number | null
+  max_speed_kph: number | null
+  avg_cadence: number | null
+  pace_per_km: number | null
+  // Other
+  calories: number | null
+  avg_temperature: number | null
+  activity_name: string | null
+  // JSONB
+  zones: unknown | null
+  gaps: unknown | null
+  intervals_data: unknown | null
+  // Coach fields
   athlete_notes?: string | null
   ai_summary?: string | null
   review_conversation_id?: string | null

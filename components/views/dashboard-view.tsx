@@ -161,30 +161,64 @@ function TodaysSessionCard({ onOpenCoach, todayEvent, todaySession, onCreateSess
 
   // State 3: Session completed today (synced from Garmin)
   if (todaySession) {
-    const dur = todaySession.actual_duration_seconds
-      ? (() => {
-          const s = todaySession.actual_duration_seconds
-          const h = Math.floor(s / 3600)
-          const m = Math.floor((s % 3600) / 60)
-          return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}min`
-        })()
-      : '—'
+    const s = todaySession
+    const isCycling = s.session_type === 'cycling'
+    const isRunning = s.session_type === 'running'
+
+    function fmtDur(secs: number | null): string {
+      if (!secs) return '—'
+      const h = Math.floor(secs / 3600)
+      const m = Math.floor((secs % 3600) / 60)
+      return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}min`
+    }
+    function fmtDist(meters: number | null): string {
+      if (!meters) return '—'
+      return meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
+    }
+    function fmtPace(pacePerKm: number | null): string {
+      if (!pacePerKm) return '—'
+      const mins = Math.floor(pacePerKm)
+      const secs = Math.round((pacePerKm - mins) * 60)
+      return `${mins}:${String(secs).padStart(2, '0')} /km`
+    }
+
+    const statsRow: [string, string, string][] = [
+      ['Time',     fmtDur(s.actual_duration_seconds),  ''],
+      ['Distance', fmtDist(s.distance_meters),          ''],
+      ...(isCycling && s.avg_power_watts != null
+        ? [['Avg Power', String(Math.round(s.avg_power_watts)), 'W'] as [string,string,string]]
+        : []),
+      ...(isRunning && s.pace_per_km != null
+        ? [['Avg Pace', fmtPace(s.pace_per_km), ''] as [string,string,string]]
+        : []),
+      ['TSS',      s.actual_tss != null ? String(Math.round(s.actual_tss)) : '—', ''],
+    ]
+
+    const ZONE_COLORS_DASH = ['#5C6470', '#3FB37F', '#E8C547', '#E89B3C', '#E5484D']
+    const zoneSegments = (() => {
+      const zones = s.zones
+      if (!Array.isArray(zones) || zones.length === 0) return null
+      const valid = (zones as Record<string, unknown>[]).filter(z => typeof z?.secs === 'number' && (z.secs as number) > 0)
+      if (valid.length === 0) return null
+      const total = valid.reduce((acc, z) => acc + (z.secs as number), 0)
+      return valid.map((z) => ({
+        flex: (z.secs as number) / total,
+        color: ZONE_COLORS_DASH[Math.min((typeof z.id === 'number' ? z.id : 1) - 1, 4)],
+      }))
+    })()
+    const sportColor = isCycling ? '#3FB37F' : isRunning ? '#E89B3C' : '#5C6470'
+
     return (
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Today&apos;s session</div>
           <Pill color="success">Completed</Pill>
         </div>
-        <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--fg-1)', marginBottom: 16 }}>
-          {todaySession.session_type ?? 'Workout'}
+        <div style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--fg-1)', marginBottom: 14 }}>
+          {s.activity_name || s.session_type || 'Workout'}
         </div>
-        <div style={{ display: 'flex', gap: 28, marginBottom: 20 }}>
-          {[
-            ['Duration', dur, ''],
-            ['TSS', todaySession.actual_tss != null ? String(todaySession.actual_tss) : '—', ''],
-            ['Avg HR', todaySession.avg_hr != null ? String(todaySession.avg_hr) : '—', 'bpm'],
-            ['Avg Power', todaySession.avg_power_watts != null ? String(todaySession.avg_power_watts) : '—', 'W'],
-          ].map(([k, v, u]) => (
+        <div style={{ display: 'flex', gap: 28, marginBottom: 16 }}>
+          {statsRow.map(([k, v, u]) => (
             <div key={k}>
               <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>{k}</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 500, color: 'var(--fg-1)', letterSpacing: '-0.01em', marginTop: 4, lineHeight: 1 }}>
@@ -192,6 +226,17 @@ function TodaysSessionCard({ onOpenCoach, todayEvent, todaySession, onCreateSess
               </div>
             </div>
           ))}
+        </div>
+        {/* Zone bar */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ height: 6, borderRadius: 3, overflow: 'hidden', display: 'flex', gap: 1 }}>
+            {zoneSegments
+              ? zoneSegments.map((seg, i) => (
+                  <div key={i} style={{ flex: seg.flex, background: seg.color }} />
+                ))
+              : <div style={{ flex: 1, background: sportColor, opacity: 0.5 }} />
+            }
+          </div>
         </div>
         <Button kind="ai" size="md" icon="sparkles" onClick={onOpenCoach}>Review with Coach</Button>
       </div>
@@ -851,41 +896,124 @@ function WeekStrip({ weekSessions, weekEvents }: WeekStripProps) {
   )
 }
 
-// ── MemoryInbox (unchanged) ───────────────────────────────────────────────────
+// ── MemoryInbox ───────────────────────────────────────────────────────────────
+
+interface PendingSuggestion {
+  id: string
+  target_module: string
+  target_field: string | null
+  action_type: string
+  suggested_value: string
+  reasoning: string
+  evidence: string | null
+}
 
 function MemoryInbox({ onNavigateToContext }: { onNavigateToContext: () => void }) {
-  const items = [
-    { target: 'Training Patterns', text: 'Athlete struggles with stacked VO2 sessions after long endurance weekends.', source: 'last 3 weeks' },
-    { target: 'Fueling Strategy', text: 'Gut tolerance drops on bars after 90 min — switch to gels for second half of long rides.', source: 'Sat ride · May 31' },
-  ]
+  const [suggestions, setSuggestions] = useState<PendingSuggestion[]>([])
+  const [loading, setLoading] = useState(true)
+  const [acting, setActing] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/context/suggestions/pending')
+      .then((r) => r.json())
+      .then((d: { suggestions?: PendingSuggestion[] }) => setSuggestions(d.suggestions ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleAction(id: string, action: 'accept' | 'reject') {
+    setActing(id)
+    try {
+      const res = await fetch(`/api/context/suggestions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      if (res.ok) {
+        setSuggestions((prev) => prev.filter((s) => s.id !== id))
+      }
+    } catch {
+      // non-fatal
+    } finally {
+      setActing(null)
+    }
+  }
+
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '18px 20px 12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Memory updates</div>
-          <Pill color="ai">{items.length} pending</Pill>
+          {suggestions.length > 0 && (
+            <div style={{ width: 18, height: 18, borderRadius: 999, background: 'var(--ai)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', fontFamily: 'var(--font-mono)' }}>{suggestions.length}</span>
+            </div>
+          )}
         </div>
         <Button kind="ghost" size="sm" iconRight="arrow-right" onClick={onNavigateToContext}>Open Context</Button>
       </div>
-      {items.map((it, i) => (
-        <div key={i} style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)', display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'start' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <Icon name="sparkles" size={11} color="var(--ai)" />
-              <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-                Suggested update → <span style={{ color: 'var(--ai)' }}>{it.target}</span>
-              </span>
-              <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>· {it.source}</span>
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5 }}>{it.text}</div>
+
+      <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
+        {loading ? (
+          <div style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-4)', fontSize: 13 }}>
+            <Icon name="sparkles" size={13} color="var(--fg-4)" />
+            Loading…
           </div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <Button kind="ai" size="sm" icon="check">Accept</Button>
-            <Button kind="ghost" size="sm" icon="pencil-line">Edit</Button>
-            <Button kind="ghost" size="sm" icon="x">Reject</Button>
+        ) : suggestions.length === 0 ? (
+          <div style={{ padding: '24px 20px', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-3)' }}>
+            <Icon name="sparkles" size={13} color="var(--fg-4)" />
+            <span style={{ fontSize: 13 }}>No pending memory updates.</span>
           </div>
-        </div>
-      ))}
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {suggestions.map((s, i) => (
+              <div
+                key={s.id}
+                style={{
+                  padding: '14px 20px',
+                  borderBottom: i < suggestions.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <Icon name="sparkles" size={11} color="var(--ai)" />
+                  <span style={{ fontSize: 11, color: 'var(--ai)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {s.target_module.replace('_', ' ')}
+                  </span>
+                  {s.target_field && (
+                    <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>→ {s.target_field}</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5, marginBottom: 4 }}>
+                  {s.suggested_value.length > 120 ? s.suggested_value.slice(0, 120) + '…' : s.suggested_value}
+                </div>
+                {s.evidence && (
+                  <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+                    {s.evidence}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  <Button
+                    kind="ai"
+                    size="sm"
+                    icon="check"
+                    onClick={() => handleAction(s.id, 'accept')}
+                  >
+                    {acting === s.id ? 'Saving…' : 'Accept'}
+                  </Button>
+                  <Button
+                    kind="ghost"
+                    size="sm"
+                    icon="x"
+                    onClick={() => handleAction(s.id, 'reject')}
+                  >
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -29,9 +29,16 @@ export default async function SettingsPage() {
     last4: anthropicKey ? anthropicKey.slice(-4) : null,
   }
 
+  const userEmail = user.email ?? null
+  const displayName = user.user_metadata?.full_name as string | undefined
+
   return (
-    <AppShell>
-      <SettingsView intervalsConnection={intervalsConnection} anthropicKeyState={anthropicKeyState} />
+    <AppShell userName={displayName ?? userEmail ?? undefined} userEmail={userEmail ?? undefined}>
+      <SettingsView
+        intervalsConnection={intervalsConnection}
+        anthropicKeyState={anthropicKeyState}
+        userEmail={userEmail}
+      />
     </AppShell>
   )
 }

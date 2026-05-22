@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
+function parseValue(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -47,48 +55,67 @@ export async function PATCH(
   const targetModule = s.target_module as string
   const actionType = s.action_type as string
   const targetField = s.target_field as string | null
+  const now = new Date().toISOString()
 
   try {
     if (actionType === 'append' && targetModule === 'training_patterns') {
       await admin.from('training_patterns').insert({
         user_id: user.id,
         pattern_text: resolvedValue,
-        category: 'other',
-        sport: 'general',
+        category: targetField || 'general',
         confidence: 'low',
         observation_count: 1,
         evidence: s.evidence ?? null,
         source_conversation_id: s.source_conversation_id ?? null,
         status: 'active',
+        first_observed_date: now,
+        last_observed_date: now,
       })
     } else if (actionType === 'append' && targetModule === 'health_injury') {
-      let parsed: unknown
-      try { parsed = JSON.parse(resolvedValue) } catch { parsed = null }
-      if (parsed) {
-        // Get current active_injuries and append
-        const { data: healthRow } = await admin
-          .from('health_injury')
-          .select('active_injuries')
-          .eq('user_id', user.id)
-          .single()
-        const current = (healthRow as Record<string, unknown> | null)?.active_injuries
-        const existing = Array.isArray(current) ? current : []
-        await admin
-          .from('health_injury')
-          .update({ active_injuries: [...existing, parsed], updated_at: new Date().toISOString() })
-          .eq('user_id', user.id)
+      const itemObject = parseValue(resolvedValue) as Record<string, unknown>
+      if (itemObject && typeof itemObject === 'object') {
+        itemObject.id = crypto.randomUUID()
+        const today = new Date().toISOString().split('T')[0]
+        if (targetField === 'illnesses') {
+          itemObject.date_added = today
+          const { data: healthRow } = await admin
+            .from('health_injury')
+            .select('illnesses')
+            .eq('user_id', user.id)
+            .single()
+          const current = (healthRow as Record<string, unknown> | null)?.illnesses
+          const existing = Array.isArray(current) ? current : []
+          await admin
+            .from('health_injury')
+            .update({ illnesses: [...existing, itemObject], updated_at: now })
+            .eq('user_id', user.id)
+        } else {
+          // active_injuries (physical injuries)
+          const { data: healthRow } = await admin
+            .from('health_injury')
+            .select('active_injuries')
+            .eq('user_id', user.id)
+            .single()
+          const current = (healthRow as Record<string, unknown> | null)?.active_injuries
+          const existing = Array.isArray(current) ? current : []
+          await admin
+            .from('health_injury')
+            .update({ active_injuries: [...existing, itemObject], updated_at: now })
+            .eq('user_id', user.id)
+        }
       }
     } else if (actionType === 'update_field' && targetField) {
+      const value = parseValue(resolvedValue)
       await admin
         .from(targetModule)
-        .update({ [targetField]: resolvedValue, updated_at: new Date().toISOString() })
+        .update({ [targetField]: value, updated_at: now })
         .eq('user_id', user.id)
     } else if (actionType === 'archive' && targetModule === 'training_patterns') {
-      const targetRecordId = (s as Record<string, unknown>).target_record_id as string | null
+      const targetRecordId = s.target_record_id as string | null
       if (targetRecordId) {
         await admin
           .from('training_patterns')
-          .update({ status: 'archived', updated_at: new Date().toISOString() })
+          .update({ status: 'archived', updated_at: now })
           .eq('id', targetRecordId)
           .eq('user_id', user.id)
       }

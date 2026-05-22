@@ -22,9 +22,38 @@ const ROUTE_NAMES: Record<string, string> = {
 interface AppShellProps {
   children: React.ReactNode
   fullWidth?: boolean
+  userName?: string
+  userEmail?: string
 }
 
-export default function AppShell({ children, fullWidth = false }: AppShellProps) {
+function deriveInitials(name?: string, email?: string): string {
+  if (name) {
+    const parts = name.trim().split(/[\s._-]+/).filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    return parts[0].slice(0, 2).toUpperCase()
+  }
+  if (email) {
+    const local = email.split('@')[0]
+    const parts = local.split(/[._-]+/).filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+    return local.slice(0, 2).toUpperCase()
+  }
+  return 'U'
+}
+
+function deriveDisplayName(name?: string, email?: string): string {
+  if (name) return name
+  if (email) {
+    const local = email.split('@')[0]
+    return local
+      .split(/[._-]+/)
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join(' ')
+  }
+  return 'Account'
+}
+
+export default function AppShell({ children, fullWidth = false, userName, userEmail }: AppShellProps) {
   const pathname = usePathname()
   const [coachOpen, setCoachOpen] = useState(true)
   const [cmdOpen, setCmdOpen] = useState(false)
@@ -45,7 +74,9 @@ export default function AppShell({ children, fullWidth = false }: AppShellProps)
   }, [])
 
   const routeName = ROUTE_NAMES[pathname] ?? 'Dashboard'
-  const breadcrumb = ['Mira Lindqvist', routeName]
+  const displayName = deriveDisplayName(userName, userEmail)
+  const initials = deriveInitials(userName, userEmail)
+  const breadcrumb = [displayName, routeName]
 
   return (
     <CoachCtx.Provider value={{ openCoach: () => setCoachOpen(true) }}>
@@ -77,7 +108,7 @@ export default function AppShell({ children, fullWidth = false }: AppShellProps)
               >
                 Coach <Kbd>⌘/</Kbd>
               </Button>
-              <Avatar initials="ML" color="#D8FE5F" />
+              <Avatar initials={initials} color="#D8FE5F" />
             </div>
           </div>
 

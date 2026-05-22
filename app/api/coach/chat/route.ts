@@ -5,6 +5,11 @@ import { buildSystemPrompt } from '@/lib/ai/build-system-prompt'
 
 const MODEL = 'claude-sonnet-4-20250514'
 
+function isValidUUID(str: string | undefined): str is string {
+  if (!str) return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
+}
+
 const SESSION_CREATION_OVERLAY = `
 ════════════════════════════════════════
 SESSION CREATION MODE
@@ -215,55 +220,133 @@ Your task for this review:
 
       controller.close()
 
-      // Post-stream: parse context_update and save to DB
-      const contextMatch = fullText.match(/\{"context_update":\s*\{[\s\S]*?\}\s*\}/)
-      if (contextMatch) {
-        try {
-          const parsed = JSON.parse(contextMatch[0]) as {
-            context_update: {
-              target_module: string
-              target_field?: string
-              action_type: string
-              suggested_value: unknown
-              reasoning: string
-              evidence?: string
-            }
+      console.log('=== FULL AI RESPONSE ===')
+      console.log(fullText)
+
+      // Ensure the conversation row exists before any FK-referencing inserts
+      const validConvId = isValidUUID(conversationId) ? conversationId : null
+      if (validConvId) {
+        const { data: existingConv } = await admin
+          .from('conversations')
+          .select('id')
+          .eq('id', validConvId)
+          .single()
+
+        if (!existingConv) {
+          const { error: convErr } = await admin
+            .from('conversations')
+            .insert({
+              id: validConvId,
+              user_id: user.id,
+              context_type: contextType,
+              message_count: messages.length,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+          if (convErr) {
+            console.error('=== CONVERSATION INSERT ERROR ===', convErr)
           }
-          const update = parsed.context_update
-          const PROTECTED = ['athlete_profile', 'coach_style']
-          if (!PROTECTED.includes(update.target_module)) {
-            await admin.from('context_suggestions').insert({
+        } else {
+          await admin
+            .from('conversations')
+            .update({
+              message_count: messages.length,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', validConvId)
+        }
+      }
+
+      // Post-stream: parse all context_update blocks and save to DB
+      const contextUpdateRegex = /\{"context_update":\{[\s\S]*?\}\}/g
+      const matches = fullText.match(contextUpdateRegex)
+      console.log('=== CONTEXT UPDATE BLOCKS FOUND ===', matches?.length ?? 0)
+
+      if (matches && matches.length > 0) {
+        const allowedModules = [
+          'plan_dna', 'training_patterns', 'adaptation_rules',
+          'race_goals', 'fueling_strategy', 'health_injury',
+          'recovery_preferences', 'session_notes',
+        ]
+
+        for (const match of matches) {
+          try {
+            const parsed = JSON.parse(match) as {
+              context_update: {
+                target_module: string
+                target_field?: string | null
+                action_type: string
+                suggested_value: unknown
+                reasoning?: string
+                evidence?: string
+              }
+            }
+            const update = parsed.context_update
+
+            console.log('=== SAVING CONTEXT UPDATE ===', update.target_module)
+
+            if (!allowedModules.includes(update.target_module)) {
+              console.log('BLOCKED — invalid module:', update.target_module)
+              continue
+            }
+
+            const suggestionData = {
               user_id: user.id,
               target_module: update.target_module,
               target_field: update.target_field ?? null,
               action_type: update.action_type,
-              suggested_value: typeof update.suggested_value === 'string'
-                ? update.suggested_value
-                : JSON.stringify(update.suggested_value),
-              reasoning: update.reasoning,
+              suggested_value: typeof update.suggested_value === 'object'
+                ? JSON.stringify(update.suggested_value)
+                : String(update.suggested_value),
+              reasoning: update.reasoning ?? '',
               evidence: update.evidence ?? null,
-              source_conversation_id: conversationId ?? null,
-              triggered_by: 'user_conversation',
+              triggered_by: 'ai_conversation',
               status: 'pending',
-            })
+            }
+
+            const { data, error } = await admin
+              .from('context_suggestions')
+              .insert({ ...suggestionData, source_conversation_id: validConvId })
+              .select()
+              .single()
+
+            if (error?.code === '23503') {
+              // FK violation — conversation row missing despite upsert; retry without the link
+              console.warn('=== FK FALLBACK — retrying without source_conversation_id ===')
+              const { data: d2, error: e2 } = await admin
+                .from('context_suggestions')
+                .insert({ ...suggestionData, source_conversation_id: null })
+                .select()
+                .single()
+              if (e2) {
+                console.error('=== SUPABASE INSERT ERROR (fallback) ===', e2)
+              } else {
+                console.log('=== CONTEXT SUGGESTION SAVED (fallback) ===', (d2 as Record<string, unknown>)?.id)
+              }
+            } else if (error) {
+              console.error('=== SUPABASE INSERT ERROR ===', error)
+            } else {
+              console.log('=== CONTEXT SUGGESTION SAVED ===', (data as Record<string, unknown>)?.id)
+            }
+          } catch (e) {
+            console.error('=== JSON PARSE ERROR ===', (e as Error).message)
+            console.error('=== RAW BLOCK ===', match)
           }
-        } catch {
-          // Parsing failed — skip silently
         }
       }
 
-      // Save messages to conversation_messages if conversationId provided
-      if (conversationId) {
+      // Save messages to conversation_messages (conversation row guaranteed above)
+      if (validConvId) {
         const lastUserMsg = messages[messages.length - 1]
         if (lastUserMsg?.role === 'user') {
           await admin.from('conversation_messages').insert([
             {
-              conversation_id: conversationId,
+              conversation_id: validConvId,
               role: 'user',
               content: lastUserMsg.content,
             },
             {
-              conversation_id: conversationId,
+              conversation_id: validConvId,
               role: 'assistant',
               content: fullText,
             },

@@ -1,6 +1,7 @@
 import type {
   IntervalWellness,
   IntervalActivity,
+  IntervalActivityDetail,
   IntervalAthlete,
   IntervalEvent,
 } from './types'
@@ -59,6 +60,12 @@ export function createIntervalsClient(apiKey: string, athleteId: string) {
     getActivities(oldest: string, newest: string): Promise<IntervalActivity[]> {
       return get<IntervalActivity[]>(
         `/api/v1/athlete/${athleteId}/activities?oldest=${oldest}&newest=${newest}`
+      )
+    },
+
+    getActivityDetail(activityId: string): Promise<IntervalActivityDetail> {
+      return get<IntervalActivityDetail>(
+        `/api/v1/athlete/${athleteId}/activities/${activityId}`
       )
     },
 

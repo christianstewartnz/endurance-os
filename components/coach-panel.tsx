@@ -41,7 +41,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [conversationId] = useState(() => uid())
+  const [conversationId] = useState(() => crypto.randomUUID())
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const [loadedModules, setLoadedModules] = useState<string[]>([])
   const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
@@ -162,34 +162,34 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
         }
       }
 
-      // Strip context_update JSON from displayed message
-      const contextMatch = fullText.match(/\{"context_update":\s*\{[\s\S]*?\}\s*\}/)
-      if (contextMatch) {
-        const displayText = fullText.replace(contextMatch[0], '').trim()
+      // Strip all context_update JSON blocks from the displayed message
+      const contextUpdateRegex = /\{"context_update":\{[\s\S]*?\}\}/g
+      const allMatches = fullText.match(contextUpdateRegex)
+      if (allMatches && allMatches.length > 0) {
+        const displayText = fullText.replace(contextUpdateRegex, '').trim()
         setMessages((prev) =>
           prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText } : m)
         )
-        // Create inline suggestion card
+        // Fetch pending suggestions saved by the server for this conversation
         try {
-          const parsed = JSON.parse(contextMatch[0]) as {
-            context_update: ContextSuggestion & { target_module: string; suggested_value: string; reasoning: string; evidence?: string }
-          }
-          // Fetch the pending suggestion ID from DB (the API route saved it)
           const pendingRes = await fetch('/api/context/suggestions/pending')
-          const pendingData = await pendingRes.json() as { suggestions: Array<ContextSuggestion & { id: string }> }
-          const latest = pendingData.suggestions?.[0]
-          if (latest) {
+          const { suggestions } = await pendingRes.json() as {
+            suggestions: Array<ContextSuggestion & { id: string; source_conversation_id: string | null }>
+          }
+          const newSuggestions = (suggestions ?? []).filter(
+            (s) => s.source_conversation_id === conversationId
+          )
+          if (newSuggestions.length > 0) {
             setInlineCards((prev) => [
               ...prev,
-              {
+              ...newSuggestions.map((s) => ({
                 messageId: aiMsgId,
-                suggestion: latest,
-                state: 'pending',
-                editValue: latest.suggested_value,
-              },
+                suggestion: s,
+                state: 'pending' as const,
+                editValue: s.suggested_value,
+              })),
             ])
           }
-          void parsed
         } catch {
           // skip
         }

@@ -56,6 +56,14 @@ function mapActivityType(intervalsType: string): string {
   return map[intervalsType] ?? 'general'
 }
 
+function extractBestPower(gaps: unknown, targetSecs: number): number | null {
+  if (!Array.isArray(gaps)) return null
+  const entry = (gaps as { secs?: number; watts?: number }[]).find(
+    (g) => g.secs === targetSecs
+  )
+  return typeof entry?.watts === 'number' ? entry.watts : null
+}
+
 export async function syncWellness(userId: string): Promise<void> {
   const creds = await getUserCredentials(userId)
   if (!creds) return
@@ -124,21 +132,74 @@ export async function syncActivities(userId: string): Promise<void> {
     return
   }
 
-  const rows = activities.map((a) => ({
-    user_id: userId,
-    session_id: String(a.id),
-    session_date: a.start_date_local.split('T')[0],
-    session_type: mapActivityType(a.type),
-    sport: mapActivityType(a.type),
-    actual_tss: a.icu_training_load ?? null,
-    actual_duration_seconds: a.elapsed_time ?? null,
-    avg_power_watts: a.average_watts ?? null,
-    normalized_power_watts: a.weighted_average_watts ?? null,
-    avg_hr: a.average_heartrate ?? null,
-    max_hr: a.max_heartrate ?? null,
-    cardiac_drift_percent: a.cardiac_drift_percent ?? null,
-    is_archived: false,
-  }))
+  // Fetch detail for each activity in parallel to get interval/lap data
+  const detailResults = await Promise.allSettled(
+    activities.map((a) => client.getActivityDetail(String(a.id)))
+  )
+
+  const rows = activities.map((a, idx) => {
+    const detailResult = detailResults[idx]
+    const detail = detailResult.status === 'fulfilled' ? detailResult.value : null
+
+    const sport = mapActivityType(a.type)
+    const isRun = sport === 'running'
+
+    const avgSpeedKph = a.average_speed != null ? a.average_speed * 3.6 : null
+    const maxSpeedKph = a.max_speed != null ? a.max_speed * 3.6 : null
+    const totalWorkKj = a.total_work != null ? Math.round(a.total_work / 1000) : null
+
+    const pacePerKm =
+      isRun && a.distance && a.elapsed_time
+        ? (a.elapsed_time / 60) / (a.distance / 1000)
+        : null
+
+    const gaps = a.icu_gaps ?? null
+    const best20minPower = extractBestPower(gaps, 1200)
+    const best60minPower = extractBestPower(gaps, 3600)
+
+    return {
+      user_id: userId,
+      session_id: String(a.id),
+      session_date: a.start_date_local.split('T')[0],
+      session_type: sport,
+      sport,
+      // Core
+      actual_tss: a.icu_training_load ?? null,
+      actual_duration_seconds: a.elapsed_time ?? null,
+      avg_hr: a.average_heartrate ?? null,
+      max_hr: a.max_heartrate ?? null,
+      cardiac_drift_percent: a.cardiac_drift_percent ?? null,
+      is_archived: false,
+      // Power
+      avg_power_watts: a.average_watts ?? null,
+      normalized_power_watts: a.weighted_average_watts ?? null,
+      max_power_watts: a.max_watts ?? null,
+      total_work_kj: totalWorkKj,
+      best_20min_power: best20minPower,
+      best_60min_power: best60minPower,
+      // Training metrics
+      intensity_factor: a.icu_intensity ?? null,
+      variability_index: a.icu_variability ?? null,
+      efficiency_factor: a.icu_efficiency_factor ?? null,
+      aerobic_decoupling: a.icu_aerobic_decoupling ?? null,
+      hrss: a.icu_hrss ?? null,
+      // Movement
+      distance_meters: a.distance ?? null,
+      elevation_gain_meters: a.total_elevation_gain ?? null,
+      avg_speed_kph: avgSpeedKph,
+      max_speed_kph: maxSpeedKph,
+      avg_cadence: a.average_cadence ?? null,
+      pace_per_km: pacePerKm,
+      // Other
+      calories: a.calories ?? null,
+      avg_temperature: a.average_temp ?? null,
+      activity_name: a.name ?? null,
+      // JSONB
+      zones: a.icu_zones ?? null,
+      gaps: gaps,
+      intervals_data: detail ?? null,
+    }
+  })
 
   const { error } = await supabase
     .from('session_notes')

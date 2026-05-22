@@ -248,9 +248,20 @@ Pre-race:
 function buildHealthLayer(health: Record<string, unknown> | null, recentInjuries: Record<string, unknown>[]): string {
   if (!health) return ''
 
+  const activeIllnesses = health.illnesses as unknown[]
+  const illnessesStr = Array.isArray(activeIllnesses) && activeIllnesses.length
+    ? (activeIllnesses as Array<{ name?: string; description?: string; date_start?: string; date_cleared?: string | null; restrictions?: string[]; hrv_impact?: string }>)
+        .filter((il) => !il.date_cleared)
+        .map((il) => `${il.name ?? 'Illness'} (since ${il.date_start ?? '?'}): ${il.description ?? ''}${il.hrv_impact ? ` — HRV: ${il.hrv_impact}` : ''}${il.restrictions?.length ? ` — restrictions: ${il.restrictions.join(', ')}` : ''}`)
+        .join('\n  ') || 'None'
+    : 'None'
+
   const active = health.active_injuries as unknown[]
   const activeStr = Array.isArray(active) && active.length
-    ? (active as Array<{ body_part?: string; description?: string; restrictions?: string[] }>).map((inj) => `${inj.body_part}: ${inj.description}${inj.restrictions?.length ? ` — restrictions: ${inj.restrictions.join(', ')}` : ''}`).join('\n  ')
+    ? (active as Array<{ body_part?: string; description?: string; restrictions?: string[]; date_cleared?: string | null }>)
+        .filter((inj) => !inj.date_cleared)
+        .map((inj) => `${inj.body_part}: ${inj.description}${inj.restrictions?.length ? ` — restrictions: ${inj.restrictions.join(', ')}` : ''}`)
+        .join('\n  ') || 'None'
     : 'None'
 
   const flags = Array.isArray(health.monitoring_flags) ? (health.monitoring_flags as string[]).join('\n  - ') : ''
@@ -262,6 +273,7 @@ function buildHealthLayer(health: Record<string, unknown> | null, recentInjuries
 HEALTH & INJURY
 ════════════════════════════════════════
 
+Active illnesses: ${illnessesStr}
 Active injuries: ${activeStr}
 ${flags ? `\nMonitoring flags:\n  - ${flags}` : ''}
 ${recentInjuries.length ? `\nRelevant history:\n${historyStr}` : ''}
@@ -364,24 +376,62 @@ ${lines}
 
 function buildContextUpdateInstructions(): string {
   return `════════════════════════════════════════
-CONTEXT UPDATE INSTRUCTIONS
+CONTEXT UPDATE PROTOCOL — MANDATORY
 ════════════════════════════════════════
 
-When you identify something worth saving to the athlete's context:
-1. Do not suggest it immediately — discuss it naturally first
-2. Only propose a formal context update when you and the athlete have reached agreement, or when pattern evidence is strong (3+ observations)
-3. Format your suggestion as JSON at the end of your message:
-   {"context_update": {
-     "target_module": "training_patterns",
-     "target_field": null,
-     "action_type": "append",
-     "suggested_value": "Athlete struggles with...",
-     "reasoning": "Observed in sessions...",
-     "evidence": "May 3, 10, 17 · 3 missed VO2 sets"
-   }}
-4. Never target athlete_profile or coach_style
-5. For training_patterns: always append, never overwrite
-6. For plan_dna: specify the exact target_field being changed
+You MUST propose context updates when any of these occur:
+
+ALWAYS propose update to health_injury when:
+- Athlete mentions illness, injury, pain, feeling unwell
+- Athlete confirms medical advice or restrictions
+- Recovery metrics consistently abnormal
+
+ALWAYS propose update to plan_dna when:
+- New training structure agreed upon
+- Weekly hours target confirmed
+- Training days or session types locked in
+
+ALWAYS propose update to training_patterns when:
+- Consistent behaviour observed across sessions
+- Athlete confirms a preference or tendency
+- Pattern emerges from conversation
+
+PROCESS:
+1. Have the coaching conversation naturally
+2. When you reach a conclusion or agreement, end your FINAL message with context update JSON blocks
+3. Do not ask permission — just include them
+4. You can include multiple blocks if needed
+
+FORMAT — append at the very end of your message:
+
+For illness (use target_field "illnesses" — NOT "active_injuries"):
+{"context_update":{"target_module":"health_injury","target_field":"illnesses","action_type":"append","suggested_value":"{\"name\":\"Cold\",\"description\":\"Upper respiratory infection\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no training until HRV normalises to within 5% baseline\"],\"date_cleared\":null}","reasoning":"Athlete confirmed cold this week","evidence":"HRV suppressed all week, symptoms improving"}}
+
+For physical injuries (sprains, strains etc — use target_field "active_injuries"):
+{"context_update":{"target_module":"health_injury","target_field":"active_injuries","action_type":"append","suggested_value":"{\"body_part\":\"left knee\",\"description\":\"IT band strain\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no running for 4 weeks\"],\"can_cycle\":true,\"can_swim\":true,\"can_strength\":false,\"date_cleared\":null}","reasoning":"Athlete confirmed knee injury","evidence":"Pain on lateral knee during long run, confirmed by physio"}}
+
+For plan_dna:
+{"context_update":{"target_module":"plan_dna","target_field":"weekly_structure","action_type":"update_field","suggested_value":"{\"tuesday\":\"quality\",\"friday\":\"quality\",\"sunday\":\"long\",\"monday\":\"easy\",\"wednesday\":\"easy\",\"thursday\":\"easy\",\"saturday\":\"easy\"}","reasoning":"Athlete confirmed weekly structure","evidence":"Agreed in conversation — 9h weekly target"}}
+
+For training_patterns — OBSERVED TENDENCIES only, not instructions:
+{"context_update":{"target_module":"training_patterns","target_field":null,"action_type":"append","suggested_value":"Upper respiratory illness suppresses HRV for 5-7 days beyond symptom resolution","reasoning":"Pattern observed from illness conversation","evidence":"HRV remained 7% suppressed all week despite symptoms clearing"}}
+
+DISTINCTION — training_patterns vs restrictions:
+  training_patterns → observed tendencies about the athlete (what IS true)
+    e.g. "Struggles with VO2 after long weekend rides"
+    e.g. "Upper respiratory illness causes 7-day HRV suppression"
+  health_injury restrictions[] → what to do about it (instructions)
+    e.g. "No training until HRV within 5% baseline"
+    e.g. "No running for 4 weeks"
+  NEVER put an instruction like "no training until X" into training_patterns.
+  NEVER put an observed tendency into restrictions[].
+
+RULES:
+- NEVER skip this when agreement is reached
+- NEVER say "I'll note that" without the JSON block
+- JSON must be valid — properly escaped quotes inside string values
+- Multiple updates = multiple separate JSON blocks, each on its own line
+- Each block must be complete and parseable on its own
 
 Allowed target_module values:
   plan_dna | training_patterns | adaptation_rules | race_goals |

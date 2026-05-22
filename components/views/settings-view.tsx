@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useTransition } from 'react'
 import { Icon, Button } from '@/components/atoms'
+import { signoutAction } from '@/app/auth/actions'
 
 interface IntervalsConnectionState {
   isConnected: boolean
@@ -18,9 +19,10 @@ interface AnthropicKeyState {
 interface SettingsViewProps {
   intervalsConnection?: IntervalsConnectionState
   anthropicKeyState?: AnthropicKeyState
+  userEmail?: string | null
 }
 
-export default function SettingsView({ intervalsConnection, anthropicKeyState }: SettingsViewProps) {
+export default function SettingsView({ intervalsConnection, anthropicKeyState, userEmail }: SettingsViewProps) {
   const [section, setSection] = useState('ai')
   const sections = [
     { id: 'account',     label: 'Account',          icon: 'user' },
@@ -65,10 +67,45 @@ export default function SettingsView({ intervalsConnection, anthropicKeyState }:
           {section === 'keys'        && <APIKeysPanel initial={anthropicKeyState} />}
           {section === 'coach'       && <CoachStylePanel />}
           {section === 'rules'       && <RulesPanel />}
-          {section === 'account'     && <SimplePanel title="Account" items={[['Name','Mira Lindqvist'],['Email','mira@endurance.os'],['Discipline','Triathlon · Long course'],['Time zone','Europe/Helsinki · GMT+3']]} />}
+          {section === 'account'     && <AccountPanel email={userEmail ?? null} />}
           {section === 'connections' && <ConnectionsPanel intervals={intervalsConnection} />}
           {section === 'appearance'  && <SimplePanel title="Appearance" items={[['Theme','Graphite (dark)'],['Density','Comfortable'],['Accent','Electric lime'],['Font','Geist · default']]} />}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Account panel ────────────────────────────────────────────────────────────
+
+function AccountPanel({ email }: { email: string | null }) {
+  const [pending, startTransition] = useTransition()
+
+  return (
+    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Account</h2>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Your Endurance OS login details.</div>
+      </div>
+
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Email</div>
+        <div style={{ fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)' }}>{email ?? '—'}</div>
+      </div>
+
+      <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>Sign out</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>You will be redirected to the login page.</div>
+        </div>
+        <Button
+          kind="ghost"
+          size="sm"
+          icon="log-out"
+          onClick={() => startTransition(() => { signoutAction() })}
+        >
+          {pending ? 'Signing out…' : 'Sign out'}
+        </Button>
       </div>
     </div>
   )
