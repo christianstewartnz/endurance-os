@@ -374,6 +374,30 @@ ${lines}
 [Older sessions available — ask athlete to reference specific date or session]`
 }
 
+function buildRecentConversationsLayer(conversations: Record<string, unknown>[]): string {
+  if (!conversations.length) return ''
+
+  const items = conversations.map((c) => {
+    const date = new Date(c.updated_at as string).toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+    })
+    const decisions = c.key_decisions as string[] | null
+    let entry = `${date}:\n${c.summary}`
+    if (decisions && decisions.length > 0) {
+      entry += `\nAgreed: ${decisions.join(' · ')}`
+    }
+    return entry
+  }).join('\n---\n')
+
+  return `════════════════════════════════════════
+RECENT COACHING CONVERSATIONS (last 14 days)
+════════════════════════════════════════
+
+${items}
+
+Conversations older than 14 days are archived. If the athlete references an older conversation, respond: "I don't have that in my active window — want me to look it up?" and if yes, fetch that specific conversation summary on demand.`
+}
+
 function buildContextUpdateInstructions(): string {
   return `════════════════════════════════════════
 CONTEXT UPDATE PROTOCOL — MANDATORY
@@ -465,6 +489,7 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     sessionsRes,
     todayWellnessRes,
     recentWellnessRes,
+    recentConversationsRes,
   ] = await Promise.all([
     admin.from('athlete_profile').select('*').eq('user_id', userId).maybeSingle(),
     admin.from('coach_style').select('*').eq('user_id', userId).maybeSingle(),
@@ -479,6 +504,7 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     admin.from('session_notes').select('*').eq('user_id', userId).eq('is_archived', false).gte('session_date', ago28).order('session_date', { ascending: false }),
     admin.from('wellness_cache').select('*').eq('user_id', userId).eq('date', today).maybeSingle(),
     admin.from('wellness_cache').select('*').eq('user_id', userId).gte('date', ago14).order('date', { ascending: false }),
+    admin.from('conversations').select('title, summary, key_decisions, created_at, updated_at').eq('user_id', userId).not('summary', 'is', null).gte('updated_at', ago14 + 'T00:00:00Z').order('updated_at', { ascending: false }).limit(10),
   ])
 
   const profile = profileRes.data as Record<string, unknown> | null
@@ -494,6 +520,7 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
   const sessions = (sessionsRes.data ?? []) as Record<string, unknown>[]
   const todayWellness = todayWellnessRes.data as Record<string, unknown> | null
   const recentWellness = (recentWellnessRes.data ?? []) as Record<string, unknown>[]
+  const recentConversations = (recentConversationsRes.data ?? []) as Record<string, unknown>[]
 
   const effectiveFtp = (profile?.ftp_override ?? profile?.ftp_watts) as number | null
   const effectivePace = (profile?.threshold_pace_override ?? profile?.threshold_pace_per_km) as number | null
@@ -512,6 +539,7 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     buildRecoveryLayer(recovery),
     buildReadinessLayer(todayWellness, recentWellness),
     buildSessionHistoryLayer(sessions),
+    buildRecentConversationsLayer(recentConversations),
     buildContextUpdateInstructions(),
   ].filter(Boolean)
 

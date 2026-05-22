@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { buildSystemPrompt } from '@/lib/ai/build-system-prompt'
+import { generateConversationSummary } from '@/lib/ai/generate-conversation-summary'
 
 const MODEL = 'claude-sonnet-4-20250514'
 
@@ -233,6 +234,16 @@ Your task for this review:
           .single()
 
         if (!existingConv) {
+          // Auto-generate title from first user message (first 6 words + "…")
+          const firstUserMsg = messages.find((m) => m.role === 'user')
+          let title: string | null = null
+          if (firstUserMsg) {
+            const words = firstUserMsg.content.trim().split(/\s+/)
+            title = words.length > 6
+              ? words.slice(0, 6).join(' ') + '…'
+              : firstUserMsg.content.trim()
+          }
+
           const { error: convErr } = await admin
             .from('conversations')
             .insert({
@@ -240,6 +251,7 @@ Your task for this review:
               user_id: user.id,
               context_type: contextType,
               message_count: messages.length,
+              title,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             })
@@ -368,6 +380,11 @@ Your task for this review:
               content: fullText,
             },
           ])
+        }
+
+        // Fire-and-forget summary generation once conversation has enough messages
+        if (messages.length >= 4) {
+          generateConversationSummary(validConvId, user.id, anthropicKey).catch(console.error)
         }
       }
     },

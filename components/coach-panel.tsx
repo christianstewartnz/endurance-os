@@ -26,8 +26,65 @@ interface InlineCard {
   editValue: string
 }
 
+interface Conversation {
+  id: string
+  title: string | null
+  summary: string | null
+  key_decisions: string[] | null
+  context_type: string
+  message_count: number
+  created_at: string
+  updated_at: string
+}
+
 function uid(): string {
   return Math.random().toString(36).slice(2)
+}
+
+function timeAgo(dateStr: string): string {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+  const diffDays = Math.floor(diffMs / 86400000)
+  if (diffMins < 2) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  if (diffDays === 1) return 'yesterday'
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function groupConversations(conversations: Conversation[]): {
+  today: Conversation[]
+  thisWeek: Conversation[]
+  last14Days: Conversation[]
+  archive: Conversation[]
+} {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const sevenDaysAgo = new Date(startOfToday.getTime() - 6 * 86400000)
+  const fourteenDaysAgo = new Date(startOfToday.getTime() - 13 * 86400000)
+
+  const today: Conversation[] = []
+  const thisWeek: Conversation[] = []
+  const last14Days: Conversation[] = []
+  const archive: Conversation[] = []
+
+  for (const c of conversations) {
+    const updated = new Date(c.updated_at)
+    if (updated >= startOfToday) {
+      today.push(c)
+    } else if (updated >= sevenDaysAgo) {
+      thisWeek.push(c)
+    } else if (updated >= fourteenDaysAgo) {
+      last14Days.push(c)
+    } else {
+      archive.push(c)
+    }
+  }
+
+  return { today, thisWeek, last14Days, archive }
 }
 
 interface CoachPanelProps {
@@ -39,13 +96,18 @@ interface CoachPanelProps {
 
 export default function CoachPanel({ onClose, contextType = 'general', sessionId, initialMessage }: CoachPanelProps) {
   const router = useRouter()
+  const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat')
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [conversationId] = useState(() => crypto.randomUUID())
+  const [conversationId, setConversationId] = useState(() => crypto.randomUUID())
+  const [conversationTitle, setConversationTitle] = useState<string | null>(null)
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const [loadedModules, setLoadedModules] = useState<string[]>([])
   const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -55,7 +117,6 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
       .then((d) => {
         setHasApiKey((d as { connected: boolean }).connected)
         if ((d as { connected: boolean }).connected) {
-          // Pre-load context module labels
           setLoadedModules(['@todayshrv', '@plandna', '@patterns'])
         }
       })
@@ -68,13 +129,66 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
     }
   }, [messages, isStreaming, inlineCards])
 
-  // Auto-send initial message if provided (e.g. from session review trigger)
   useEffect(() => {
     if (initialMessage && hasApiKey) {
       sendMessage(initialMessage)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasApiKey])
+
+  const loadHistory = useCallback(async () => {
+    setIsLoadingHistory(true)
+    try {
+      const res = await fetch('/api/coach/conversations')
+      if (res.ok) {
+        const { conversations: data } = await res.json() as { conversations: Conversation[] }
+        setConversations(data ?? [])
+      }
+    } finally {
+      setIsLoadingHistory(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'history') loadHistory()
+  }, [activeTab, loadHistory])
+
+  const startNewConversation = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort()
+    setMessages([])
+    setInlineCards([])
+    setInput('')
+    setConversationId(crypto.randomUUID())
+    setConversationTitle(null)
+    setActiveTab('chat')
+  }, [])
+
+  const loadConversation = useCallback(async (conv: Conversation) => {
+    setActiveTab('chat')
+    setConversationId(conv.id)
+    setConversationTitle(conv.title)
+    setMessages([])
+    setInlineCards([])
+    setInput('')
+
+    try {
+      const res = await fetch(`/api/coach/conversations/${conv.id}/messages`)
+      if (res.ok) {
+        const { messages: data } = await res.json() as {
+          messages: Array<{ id: string; role: string; content: string }>
+        }
+        setMessages(
+          (data ?? []).map((m) => ({
+            id: m.id ?? uid(),
+            role: m.role === 'assistant' ? 'ai' : (m.role as 'user' | 'system'),
+            content: m.content,
+          }))
+        )
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isStreaming) return
@@ -89,6 +203,12 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
     ])
     setInput('')
     setIsStreaming(true)
+
+    // Set title from first user message if not set
+    if (!conversationTitle) {
+      const words = text.trim().split(/\s+/)
+      setConversationTitle(words.length > 6 ? words.slice(0, 6).join(' ') + '…' : text.trim())
+    }
 
     const historyForApi = messages
       .filter((m) => m.role !== 'system')
@@ -163,7 +283,6 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
         }
       }
 
-      // Strip all context_update JSON blocks from the displayed message
       const contextUpdateRegex = /\{"context_update":\{[\s\S]*?\}\}/g
       const allMatches = fullText.match(contextUpdateRegex)
       if (allMatches && allMatches.length > 0) {
@@ -171,7 +290,6 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
         setMessages((prev) =>
           prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText } : m)
         )
-        // Fetch pending suggestions saved by the server for this conversation
         try {
           const pendingRes = await fetch('/api/context/suggestions/pending')
           const { suggestions } = await pendingRes.json() as {
@@ -209,7 +327,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
       setIsStreaming(false)
       abortRef.current = null
     }
-  }, [messages, isStreaming, conversationId, contextType, sessionId])
+  }, [messages, isStreaming, conversationId, conversationTitle, contextType, sessionId])
 
   async function handleSuggestionAction(cardIdx: number, action: 'accept' | 'reject' | 'edit', editedValue?: string) {
     const card = inlineCards[cardIdx]
@@ -284,99 +402,309 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
       height: '100%',
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name="sparkles" size={13} color="var(--ai)" />
+      <div style={{ padding: '12px 16px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+        {/* Top row: icon + title + close */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon name="sparkles" size={13} color="var(--ai)" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {activeTab === 'chat' ? (
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {conversationTitle ?? 'New conversation'}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em' }}>History</div>
+            )}
+            {activeTab === 'chat' && moduleLabel && (
+              <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                <span style={{ color: 'var(--ai)' }}>●</span> Reading:{' '}
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{moduleLabel}</span>
+              </div>
+            )}
+          </div>
+          <Button kind="ghost" size="sm" icon="x" onClick={onClose} />
         </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em' }}>Coach</div>
-          {moduleLabel && (
-            <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              <span style={{ color: 'var(--ai)' }}>●</span> Reading:{' '}
-              <span style={{ fontFamily: 'var(--font-mono)' }}>{moduleLabel}</span>
+
+        {/* Tab toggle */}
+        <div style={{ display: 'flex', gap: 2, marginBottom: 0 }}>
+          <TabButton
+            active={activeTab === 'chat'}
+            onClick={() => setActiveTab('chat')}
+            label="✦ Coach"
+          />
+          <TabButton
+            active={activeTab === 'history'}
+            onClick={() => setActiveTab('history')}
+            label="History"
+          />
+        </div>
+      </div>
+
+      {activeTab === 'chat' ? (
+        <>
+          {/* Messages */}
+          <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {messages.length === 0 && !isStreaming && hasApiKey && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, textAlign: 'center', color: 'var(--fg-3)', fontSize: 13 }}>
+                <Icon name="sparkles" size={20} color="var(--ai)" />
+                <span>Ask about today&apos;s session, this week, or anything in your training.</span>
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={m.id}>
+                <ChatMessage m={m} isStreaming={isStreaming && i === messages.length - 1 && m.role === 'ai'} />
+                {inlineCards
+                  .filter((c) => c.messageId === m.id)
+                  .map((card) => (
+                    <SuggestionCard
+                      key={card.suggestion.id}
+                      card={card}
+                      onAction={(action, edited) => handleSuggestionAction(
+                        inlineCards.findIndex((c) => c.suggestion.id === card.suggestion.id),
+                        action,
+                        edited,
+                      )}
+                    />
+                  ))
+                }
+              </div>
+            ))}
+            {isStreaming && messages[messages.length - 1]?.content === '' && <TypingDots />}
+          </div>
+
+          {/* Composer */}
+          <div style={{ padding: '12px 14px 14px', borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{
+              display: 'flex', flexDirection: 'column',
+              background: 'var(--bg-2)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 10,
+              padding: '10px 12px',
+            }}>
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
+                placeholder="Ask about today's session, this week, or anything in your training…"
+                rows={2}
+                disabled={isStreaming}
+                style={{
+                  background: 'transparent', border: 'none', outline: 'none',
+                  resize: 'none', color: 'var(--fg-1)', fontFamily: 'inherit',
+                  fontSize: 13, lineHeight: 1.5, padding: 0,
+                }}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                <span style={{ fontSize: 10, color: 'var(--fg-4)', marginLeft: 4 }}>@plan, @session, @week</span>
+                <div style={{ flex: 1 }} />
+                <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
+                  <Kbd>↵</Kbd> send
+                </span>
+                <button
+                  onClick={() => sendMessage(input)}
+                  disabled={!input.trim() || isStreaming}
+                  style={{
+                    width: 24, height: 24, borderRadius: 6,
+                    background: input.trim() && !isStreaming ? 'var(--accent)' : 'var(--bg-3)',
+                    color: input.trim() && !isStreaming ? 'var(--accent-fg)' : 'var(--fg-4)',
+                    border: 'none',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: input.trim() && !isStreaming ? 'pointer' : 'not-allowed',
+                    transition: 'background var(--dur-micro) var(--ease-out)',
+                  }}
+                >
+                  <Icon name="arrow-up" size={13} />
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-        <Button kind="ghost" size="sm" icon="x" onClick={onClose} />
-      </div>
-
-      {/* Messages */}
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {messages.length === 0 && !isStreaming && hasApiKey && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, textAlign: 'center', color: 'var(--fg-3)', fontSize: 13 }}>
-            <Icon name="sparkles" size={20} color="var(--ai)" />
-            <span>Ask about today&apos;s session, this week, or anything in your training.</span>
           </div>
-        )}
-        {messages.map((m, i) => (
-          <div key={m.id}>
-            <ChatMessage m={m} isStreaming={isStreaming && i === messages.length - 1 && m.role === 'ai'} />
-            {inlineCards
-              .filter((c) => c.messageId === m.id)
-              .map((card, ci) => (
-                <SuggestionCard
-                  key={card.suggestion.id}
-                  card={card}
-                  onAction={(action, edited) => handleSuggestionAction(
-                    inlineCards.findIndex((c) => c.suggestion.id === card.suggestion.id),
-                    action,
-                    edited,
-                  )}
-                />
-              ))
-            }
-          </div>
-        ))}
-        {isStreaming && messages[messages.length - 1]?.content === '' && <TypingDots />}
-      </div>
+        </>
+      ) : (
+        <HistoryTab
+          conversations={conversations}
+          isLoading={isLoadingHistory}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onNewConversation={startNewConversation}
+          onLoadConversation={loadConversation}
+        />
+      )}
+    </aside>
+  )
+}
 
-      {/* Composer */}
-      <div style={{ padding: '12px 14px 14px', borderTop: '1px solid var(--border-subtle)' }}>
-        <div style={{
-          display: 'flex', flexDirection: 'column',
-          background: 'var(--bg-2)',
-          border: '1px solid var(--border-default)',
-          borderRadius: 10,
-          padding: '10px 12px',
-        }}>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
-            placeholder="Ask about today's session, this week, or anything in your training…"
-            rows={2}
-            disabled={isStreaming}
+function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '6px 12px',
+        fontSize: 12,
+        fontWeight: active ? 600 : 400,
+        color: active ? 'var(--fg-1)' : 'var(--fg-3)',
+        background: 'transparent',
+        border: 'none',
+        borderBottom: active ? '2px solid var(--ai)' : '2px solid transparent',
+        cursor: 'pointer',
+        transition: 'color var(--dur-micro) var(--ease-out)',
+        fontFamily: 'inherit',
+        marginBottom: -1,
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+function HistoryTab({
+  conversations,
+  isLoading,
+  searchQuery,
+  onSearchChange,
+  onNewConversation,
+  onLoadConversation,
+}: {
+  conversations: Conversation[]
+  isLoading: boolean
+  searchQuery: string
+  onSearchChange: (q: string) => void
+  onNewConversation: () => void
+  onLoadConversation: (c: Conversation) => void
+}) {
+  const filtered = searchQuery.trim()
+    ? conversations.filter((c) => {
+        const q = searchQuery.toLowerCase()
+        return (
+          (c.title ?? '').toLowerCase().includes(q) ||
+          (c.summary ?? '').toLowerCase().includes(q)
+        )
+      })
+    : conversations
+
+  const groups = groupConversations(filtered)
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Search + New */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: 8 }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 7, padding: '5px 10px' }}>
+          <Icon name="search" size={12} color="var(--fg-4)" />
+          <input
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search conversations…"
             style={{
-              background: 'transparent', border: 'none', outline: 'none',
-              resize: 'none', color: 'var(--fg-1)', fontFamily: 'inherit',
-              fontSize: 13, lineHeight: 1.5, padding: 0,
+              flex: 1, background: 'transparent', border: 'none', outline: 'none',
+              fontSize: 12, color: 'var(--fg-1)', fontFamily: 'inherit',
             }}
           />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-            <span style={{ fontSize: 10, color: 'var(--fg-4)', marginLeft: 4 }}>@plan, @session, @week</span>
-            <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
-              <Kbd>↵</Kbd> send
-            </span>
-            <button
-              onClick={() => sendMessage(input)}
-              disabled={!input.trim() || isStreaming}
-              style={{
-                width: 24, height: 24, borderRadius: 6,
-                background: input.trim() && !isStreaming ? 'var(--accent)' : 'var(--bg-3)',
-                color: input.trim() && !isStreaming ? 'var(--accent-fg)' : 'var(--fg-4)',
-                border: 'none',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                cursor: input.trim() && !isStreaming ? 'pointer' : 'not-allowed',
-                transition: 'background var(--dur-micro) var(--ease-out)',
-              }}
-            >
-              <Icon name="arrow-up" size={13} />
+          {searchQuery && (
+            <button onClick={() => onSearchChange('')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+              <Icon name="x" size={11} color="var(--fg-4)" />
             </button>
-          </div>
+          )}
         </div>
+        <Button kind="ghost" size="sm" icon="plus" onClick={onNewConversation}>New</Button>
       </div>
-    </aside>
+
+      {/* List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+        {isLoading ? (
+          <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--fg-4)' }}>Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: 'var(--fg-4)' }}>
+            {searchQuery ? 'No conversations match your search.' : 'No conversation history yet.'}
+          </div>
+        ) : (
+          <>
+            <ConversationGroup label="Today" items={groups.today} onLoad={onLoadConversation} showArchiveButton={false} />
+            <ConversationGroup label="This week" items={groups.thisWeek} onLoad={onLoadConversation} showArchiveButton={false} />
+            <ConversationGroup label="Last 14 days" items={groups.last14Days} onLoad={onLoadConversation} showArchiveButton={false} />
+            <ConversationGroup label="Archive" items={groups.archive} onLoad={onLoadConversation} showArchiveButton={true} />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ConversationGroup({
+  label,
+  items,
+  onLoad,
+  showArchiveButton,
+}: {
+  label: string
+  items: Conversation[]
+  onLoad: (c: Conversation) => void
+  showArchiveButton: boolean
+}) {
+  if (!items.length) return null
+
+  return (
+    <div>
+      <div style={{ padding: '4px 16px 2px', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        {label}
+      </div>
+      {items.map((c) => (
+        <ConversationRow key={c.id} conversation={c} onLoad={onLoad} showArchiveButton={showArchiveButton} />
+      ))}
+    </div>
+  )
+}
+
+function ConversationRow({
+  conversation: c,
+  onLoad,
+  showArchiveButton,
+}: {
+  conversation: Conversation
+  onLoad: (c: Conversation) => void
+  showArchiveButton: boolean
+}) {
+  return (
+    <div
+      style={{
+        padding: '8px 16px',
+        cursor: 'pointer',
+        borderBottom: '1px solid var(--border-subtle)',
+        transition: 'background var(--dur-micro) var(--ease-out)',
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-2)' }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+      onClick={() => { if (!showArchiveButton) onLoad(c) }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 2 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {c.title ?? 'Untitled conversation'}
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--fg-4)', flexShrink: 0 }}>{timeAgo(c.updated_at)}</span>
+      </div>
+      {c.summary ? (
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+          {c.summary}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--fg-4)', fontStyle: 'italic' }}>
+          {c.message_count ?? 0} message{(c.message_count ?? 0) !== 1 ? 's' : ''}
+        </div>
+      )}
+      {showArchiveButton && (
+        <div style={{ marginTop: 6 }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onLoad(c) }}
+            style={{
+              fontSize: 11, color: 'var(--ai)', background: 'var(--ai-soft)',
+              border: '1px solid var(--ai-edge)', borderRadius: 5,
+              padding: '3px 8px', cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            Load full conversation
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -433,7 +761,6 @@ function ChatMessage({ m, isStreaming }: { m: Message; isStreaming: boolean }) {
 function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion }) {
   const { target_module, target_field, suggested_value } = suggestion
 
-  // Try to parse as JSON — falls back to plain string
   let parsed: Record<string, unknown> | null = null
   try {
     const v = JSON.parse(suggested_value)
@@ -441,7 +768,6 @@ function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion 
   } catch { /* plain text */ }
 
   if (!parsed) {
-    // Plain text (e.g. training_patterns)
     return <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5 }}>{suggested_value}</div>
   }
 
@@ -489,7 +815,6 @@ function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion 
     )
   }
 
-  // Generic JSON object — render as key: value pairs, skip nulls and ids
   const skip = new Set(['id', 'date_added', 'date_cleared', 'can_cycle', 'can_swim', 'can_strength'])
   const entries = Object.entries(parsed).filter(([k, v]) => !skip.has(k) && v != null && v !== '')
   return (
