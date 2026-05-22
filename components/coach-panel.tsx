@@ -13,6 +13,7 @@ interface Message {
 interface ContextSuggestion {
   id: string
   target_module: string
+  target_field: string | null
   suggested_value: string
   reasoning: string
   evidence: string | null
@@ -176,19 +177,24 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
           const { suggestions } = await pendingRes.json() as {
             suggestions: Array<ContextSuggestion & { id: string; source_conversation_id: string | null }>
           }
-          const newSuggestions = (suggestions ?? []).filter(
+          const forThisConv = (suggestions ?? []).filter(
             (s) => s.source_conversation_id === conversationId
           )
-          if (newSuggestions.length > 0) {
-            setInlineCards((prev) => [
-              ...prev,
-              ...newSuggestions.map((s) => ({
-                messageId: aiMsgId,
-                suggestion: s,
-                state: 'pending' as const,
-                editValue: s.suggested_value,
-              })),
-            ])
+          if (forThisConv.length > 0) {
+            setInlineCards((prev) => {
+              const existingIds = new Set(prev.map((c) => c.suggestion.id))
+              const trulyNew = forThisConv.filter((s) => !existingIds.has(s.id))
+              if (!trulyNew.length) return prev
+              return [
+                ...prev,
+                ...trulyNew.map((s) => ({
+                  messageId: aiMsgId,
+                  suggestion: s,
+                  state: 'pending' as const,
+                  editValue: s.suggested_value,
+                })),
+              ]
+            })
           }
         } catch {
           // skip
@@ -424,6 +430,80 @@ function ChatMessage({ m, isStreaming }: { m: Message; isStreaming: boolean }) {
   )
 }
 
+function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion }) {
+  const { target_module, target_field, suggested_value } = suggestion
+
+  // Try to parse as JSON — falls back to plain string
+  let parsed: Record<string, unknown> | null = null
+  try {
+    const v = JSON.parse(suggested_value)
+    if (v && typeof v === 'object' && !Array.isArray(v)) parsed = v as Record<string, unknown>
+  } catch { /* plain text */ }
+
+  if (!parsed) {
+    // Plain text (e.g. training_patterns)
+    return <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5 }}>{suggested_value}</div>
+  }
+
+  if (target_module === 'health_injury' && target_field === 'illnesses') {
+    const name = String(parsed.name ?? 'Illness')
+    const desc = parsed.description ? String(parsed.description) : null
+    const start = parsed.date_start ? String(parsed.date_start) : null
+    const restrictions = Array.isArray(parsed.restrictions) ? parsed.restrictions as string[] : []
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>🤒</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{name}</span>
+          {start && <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>from {start}</span>}
+        </div>
+        {desc && <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>{desc}</div>}
+        {restrictions.map((r, i) => (
+          <div key={i} style={{ fontSize: 12, color: 'var(--fg-2)', display: 'flex', gap: 5 }}>
+            <span style={{ color: 'var(--fg-4)' }}>•</span>{r}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (target_module === 'health_injury' && target_field === 'active_injuries') {
+    const part = String(parsed.body_part ?? 'Injury')
+    const desc = parsed.description ? String(parsed.description) : null
+    const start = parsed.date_start ? String(parsed.date_start) : null
+    const restrictions = Array.isArray(parsed.restrictions) ? parsed.restrictions as string[] : []
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>🩹</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{part}</span>
+          {start && <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>from {start}</span>}
+        </div>
+        {desc && <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>{desc}</div>}
+        {restrictions.map((r, i) => (
+          <div key={i} style={{ fontSize: 12, color: 'var(--fg-2)', display: 'flex', gap: 5 }}>
+            <span style={{ color: 'var(--fg-4)' }}>•</span>{r}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  // Generic JSON object — render as key: value pairs, skip nulls and ids
+  const skip = new Set(['id', 'date_added', 'date_cleared', 'can_cycle', 'can_swim', 'can_strength'])
+  const entries = Object.entries(parsed).filter(([k, v]) => !skip.has(k) && v != null && v !== '')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {entries.map(([k, v]) => (
+        <div key={k} style={{ fontSize: 12, color: 'var(--fg-1)', display: 'flex', gap: 6 }}>
+          <span style={{ color: 'var(--fg-4)', minWidth: 80 }}>{k.replace(/_/g, ' ')}</span>
+          <span>{Array.isArray(v) ? (v as unknown[]).join(', ') : String(v)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function SuggestionCard({ card, onAction }: {
   card: InlineCard
   onAction: (action: 'accept' | 'reject' | 'edit', editedValue?: string) => void
@@ -475,8 +555,8 @@ function SuggestionCard({ card, onAction }: {
           }}
         />
       ) : (
-        <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5, marginBottom: 4 }}>
-          {card.suggestion.suggested_value}
+        <div style={{ marginBottom: 4 }}>
+          <SuggestionValueDisplay suggestion={card.suggestion} />
         </div>
       )}
       {card.suggestion.evidence && (

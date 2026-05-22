@@ -304,6 +304,23 @@ Your task for this review:
               status: 'pending',
             }
 
+            // Skip if an identical pending suggestion already exists for this conversation
+            if (validConvId) {
+              const { data: existing } = await admin
+                .from('context_suggestions')
+                .select('id')
+                .eq('user_id', user.id)
+                .eq('source_conversation_id', validConvId)
+                .eq('target_module', suggestionData.target_module)
+                .eq('suggested_value', suggestionData.suggested_value)
+                .eq('status', 'pending')
+                .maybeSingle()
+              if (existing) {
+                console.log('=== DUPLICATE SUGGESTION SKIPPED ===', update.target_module)
+                continue
+              }
+            }
+
             const { data, error } = await admin
               .from('context_suggestions')
               .insert({ ...suggestionData, source_conversation_id: validConvId })
