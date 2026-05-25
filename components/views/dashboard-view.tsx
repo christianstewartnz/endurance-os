@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Icon, Button, Pill, Sparkline } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
+import { SessionOverviewModal } from '@/components/views/calendar-view'
 import type { WellnessCacheRow, SessionNoteRow, IntervalEvent } from '@/lib/intervals/types'
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -68,6 +69,46 @@ export default function DashboardView({
   const { openCoach } = useCoachPanel()
   const [showSessionModal, setShowSessionModal] = useState(false)
   const [sessionCreated, setSessionCreated] = useState(false)
+  const [overviewSession, setOverviewSession] = useState<SessionNoteRow | null>(null)
+  const [overviewVisible, setOverviewVisible] = useState(false)
+  const [reflectionText, setReflectionText] = useState('')
+  const [reflectionSaving, setReflectionSaving] = useState(false)
+  const reflectionRef = useRef<HTMLTextAreaElement>(null)
+
+  const openSessionOverview = useCallback((session: SessionNoteRow) => {
+    setOverviewSession(session)
+    setReflectionText(session.athlete_notes ?? '')
+    requestAnimationFrame(() => requestAnimationFrame(() => setOverviewVisible(true)))
+  }, [])
+
+  const closeSessionOverview = useCallback(() => {
+    setOverviewVisible(false)
+    setTimeout(() => setOverviewSession(null), 120)
+  }, [])
+
+  const saveReflection = useCallback(async () => {
+    if (!overviewSession) return
+    setReflectionSaving(true)
+    try {
+      await fetch(`/api/sessions/${overviewSession.session_id}/notes`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ athlete_notes: reflectionText }),
+      })
+      setOverviewSession({ ...overviewSession, athlete_notes: reflectionText })
+    } catch {
+      // silently fail
+    } finally {
+      setReflectionSaving(false)
+    }
+  }, [overviewSession, reflectionText])
+
+  useEffect(() => {
+    if (!overviewVisible) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeSessionOverview() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [closeSessionOverview, overviewVisible])
 
   // Build header subtitle from real HRV data if available
   const headerSubtitle = (() => {
@@ -122,8 +163,34 @@ export default function DashboardView({
         hasIntervalsConnected={hasIntervalsConnected}
         onConnect={() => router.push('/settings?section=connections')}
       />
-      <WeekStrip weekSessions={weekSessions} weekEvents={weekEvents} />
+      <WeekStrip
+        weekSessions={weekSessions}
+        weekEvents={weekEvents}
+        onSessionSelect={openSessionOverview}
+        selectedSessionId={overviewSession?.session_id ?? null}
+      />
       <MemoryInbox onNavigateToContext={() => router.push('/context')} />
+      {overviewSession && (
+        <>
+          <style>{`
+            @keyframes tabFadeUp {
+              from { opacity: 0; transform: translateY(6px); }
+              to   { opacity: 1; transform: translateY(0); }
+            }
+          `}</style>
+          <SessionOverviewModal
+            session={overviewSession}
+            visible={overviewVisible}
+            reflectionText={reflectionText}
+            reflectionSaving={reflectionSaving}
+            reflectionRef={reflectionRef}
+            onClose={closeSessionOverview}
+            onReflectionChange={setReflectionText}
+            onReflectionSave={saveReflection}
+            onCoachOpen={() => { closeSessionOverview(); openCoach() }}
+          />
+        </>
+      )}
     </div>
   )
 }
@@ -776,49 +843,134 @@ function ReadinessRow({ wellnessToday, wellness14d, hasIntervalsConnected, onCon
 
 // ── WeekStrip ────────────────────────────────────────────────────────────────
 
+function parseLocalDate(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function toLocalDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const d = parseLocalDate(dateStr)
+  d.setDate(d.getDate() + days)
+  return toLocalDateStr(d)
+}
+
+function currentMondayStr(): string {
+  const today = new Date()
+  const d = new Date(today)
+  d.setDate(today.getDate() - ((today.getDay() + 6) % 7))
+  d.setHours(0, 0, 0, 0)
+  return toLocalDateStr(d)
+}
+
+type WeekGridPhase =
+  | 'idle'
+  | 'exit-left'
+  | 'exit-right'
+  | 'enter-left'
+  | 'enter-right'
+  | 'enter-settle'
+
+function weekGridAnimStyle(phase: WeekGridPhase): React.CSSProperties {
+  const t = 'opacity 150ms cubic-bezier(0.16,1,0.3,1), transform 150ms cubic-bezier(0.16,1,0.3,1)'
+  switch (phase) {
+    case 'idle':          return { opacity: 1, transform: 'none', transition: t }
+    case 'exit-left':     return { opacity: 0, transform: 'translateX(-20px)', transition: t }
+    case 'exit-right':    return { opacity: 0, transform: 'translateX(20px)', transition: t }
+    case 'enter-left':    return { opacity: 0, transform: 'translateX(-20px)', transition: 'none' }
+    case 'enter-right':   return { opacity: 0, transform: 'translateX(20px)', transition: 'none' }
+    case 'enter-settle':  return { opacity: 1, transform: 'none', transition: t }
+  }
+}
+
 interface WeekStripProps {
   weekSessions: SessionNoteRow[]
   weekEvents: IntervalEvent[]
+  onSessionSelect?: (session: SessionNoteRow) => void
+  selectedSessionId?: string | null
 }
 
-function WeekStrip({ weekSessions, weekEvents }: WeekStripProps) {
+function WeekStrip({
+  weekSessions: initialWeekSessions,
+  weekEvents: initialWeekEvents,
+  onSessionSelect,
+  selectedSessionId,
+}: WeekStripProps) {
   const zColors: Record<string, string> = { z1: '#5C6470', z2: '#3FB37F', z3: '#E8C547', z4: '#E89B3C', z5: '#E5484D' }
-  const todayStr = new Date().toISOString().split('T')[0]
+  const todayStr = toLocalDateStr(new Date())
 
-  // Build Mon–Sun date array for the current week
-  const now = new Date()
-  const dayOfWeek = now.getDay()
-  const monday = new Date(now)
-  monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
-  const weekDates = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday)
-    d.setDate(monday.getDate() + i)
-    return d
-  })
+  const [weekMonday, setWeekMonday] = useState(currentMondayStr)
+  const [sessions, setSessions] = useState(initialWeekSessions)
+  const [events, setEvents] = useState(initialWeekEvents)
+  const [gridPhase, setGridPhase] = useState<WeekGridPhase>('idle')
+  const [navigating, setNavigating] = useState(false)
+
+  const weekSunday = addDaysToDateStr(weekMonday, 6)
+  const viewingContainsToday = todayStr >= weekMonday && todayStr <= weekSunday
+
+  const weekDates = Array.from({ length: 7 }, (_, i) => parseLocalDate(addDaysToDateStr(weekMonday, i)))
+
+  const navigateWeek = useCallback(async (dir: -1 | 1) => {
+    if (navigating) return
+    setNavigating(true)
+    const newMonday = addDaysToDateStr(weekMonday, dir * 7)
+    const goingForward = dir === 1
+    const exitPhase: WeekGridPhase = goingForward ? 'exit-left' : 'exit-right'
+    const enterPhase: WeekGridPhase = goingForward ? 'enter-right' : 'enter-left'
+    setGridPhase(exitPhase)
+    await new Promise((r) => setTimeout(r, 150))
+    setWeekMonday(newMonday)
+    const sunday = addDaysToDateStr(newMonday, 6)
+    try {
+      const res = await fetch(`/api/calendar?start=${newMonday}&end=${sunday}`)
+      if (res.ok) {
+        const data = await res.json()
+        setSessions(data.sessions ?? [])
+        setEvents(data.plannedEvents ?? [])
+      }
+    } catch {
+      // Keep existing data on fetch failure
+    }
+    setGridPhase(enterPhase)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setGridPhase('enter-settle')
+        setTimeout(() => {
+          setGridPhase('idle')
+          setNavigating(false)
+        }, 150)
+      })
+    })
+  }, [navigating, weekMonday])
 
   // Index completed sessions by date
   const sessionByDate = new Map<string, SessionNoteRow>()
-  for (const s of weekSessions) {
+  for (const s of sessions) {
     sessionByDate.set(s.session_date, s)
   }
 
   // Index planned events by date
   const eventByDate = new Map<string, IntervalEvent>()
-  for (const e of weekEvents) {
+  for (const e of events) {
     const date = e.start_date_local.split('T')[0]
     eventByDate.set(date, e)
   }
 
   const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-  const plannedTss = weekEvents.reduce((s, e) => s + (e.icu_training_load ?? 0), 0)
-  const weekLabel = `${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekDates[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+  const plannedTss = events.reduce((s, e) => s + (e.icu_training_load ?? 0), 0)
+  const weekLabel = `${weekDates[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekDates[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '18px 20px 12px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>This week</div>
+          <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>
+            {viewingContainsToday ? 'This week' : 'Week'}
+          </div>
           <span style={{ fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{weekLabel}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -827,18 +979,18 @@ function WeekStrip({ weekSessions, weekEvents }: WeekStripProps) {
               Planned TSS <span style={{ color: 'var(--fg-1)' }}>{Math.round(plannedTss)}</span>
             </span>
           )}
-          <Button kind="ghost" size="sm" icon="chevron-left" />
-          <Button kind="ghost" size="sm" icon="chevron-right" />
+          <Button kind="ghost" size="sm" icon="chevron-left" onClick={() => navigateWeek(-1)} disabled={navigating} />
+          <Button kind="ghost" size="sm" icon="chevron-right" onClick={() => navigateWeek(1)} disabled={navigating} />
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderTop: '1px solid var(--border-subtle)' }}>
+      <div style={{ ...weekGridAnimStyle(gridPhase), display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderTop: '1px solid var(--border-subtle)' }}>
         {weekDates.map((date, i) => {
-          const dateStr = date.toISOString().split('T')[0]
+          const dateStr = toLocalDateStr(date)
           const session = sessionByDate.get(dateStr)
           const event   = eventByDate.get(dateStr)
           const isPast  = dateStr < todayStr
-          const isToday = dateStr === todayStr
+          const isToday = viewingContainsToday && dateStr === todayStr
 
           let state: 'done' | 'today' | 'planned' | 'off'
           let displayName: string | null = null
@@ -866,9 +1018,18 @@ function WeekStrip({ weekSessions, weekEvents }: WeekStripProps) {
 
           const isDone  = state === 'done'
           const isCurrent = state === 'today'
+          const isSelected = session != null && selectedSessionId === session.session_id
+          const zoneColor = zone ? (zColors[zone] ?? zColors.z2) : zColors.z2
+          const cardBorderColor = isSelected ? 'var(--border-strong)' : 'var(--border-default)'
+          const activityCardBorder = {
+            borderTop: `1px solid ${cardBorderColor}`,
+            borderRight: `1px solid ${cardBorderColor}`,
+            borderBottom: `1px solid ${cardBorderColor}`,
+            borderLeft: `2px solid ${zoneColor}`,
+          } as const
 
           return (
-            <div key={dateStr} style={{ padding: '14px 14px 18px', borderRight: i < 6 ? '1px solid var(--border-subtle)' : 'none', background: isCurrent ? 'var(--bg-3)' : 'transparent', position: 'relative', cursor: 'pointer' }}>
+            <div key={dateStr} style={{ padding: '14px 14px 18px', borderRight: i < 6 ? '1px solid var(--border-subtle)' : 'none', background: isCurrent ? 'var(--bg-3)' : 'transparent', position: 'relative' }}>
               {isCurrent && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 2, background: 'var(--accent)' }} />}
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
                 <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: isCurrent ? 'var(--accent)' : 'var(--fg-3)', fontWeight: 500 }}>{dayNames[i]}</span>
@@ -876,15 +1037,47 @@ function WeekStrip({ weekSessions, weekEvents }: WeekStripProps) {
               </div>
 
               {zone && displayName ? (
-                <div style={{ padding: '8px 10px', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, borderLeft: `2px solid ${zColors[zone] ?? zColors.z2}`, opacity: isDone ? 0.55 : 1 }}>
-                  <div style={{ fontSize: 12, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4, textDecoration: isDone ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {displayName}
+                session ? (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSessionSelect?.(session)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onSessionSelect?.(session)
+                      }
+                    }}
+                    style={{
+                      padding: '8px 10px',
+                      background: 'var(--bg-1)',
+                      ...activityCardBorder,
+                      borderRadius: 6,
+                      opacity: isDone ? 0.55 : 1,
+                      cursor: 'pointer',
+                      boxShadow: isSelected ? 'inset 0 0 0 1px var(--border-strong)' : 'none',
+                      transition: 'border-color 80ms, box-shadow 80ms',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4, textDecoration: isDone ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {displayName}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+                      <span>{duration ?? '—'}</span>
+                      {tss != null && tss > 0 && <span>{Math.round(tss)} TSS</span>}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-                    <span>{duration ?? '—'}</span>
-                    {tss != null && tss > 0 && <span>{Math.round(tss)} TSS</span>}
+                ) : (
+                  <div style={{ padding: '8px 10px', background: 'var(--bg-1)', ...activityCardBorder, borderRadius: 6, opacity: isDone ? 0.55 : 1 }}>
+                    <div style={{ fontSize: 12, color: 'var(--fg-1)', fontWeight: 500, marginBottom: 4, textDecoration: isDone ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {displayName}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+                      <span>{duration ?? '—'}</span>
+                      {tss != null && tss > 0 && <span>{Math.round(tss)} TSS</span>}
+                    </div>
                   </div>
-                </div>
+                )
               ) : (
                 <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--fg-3)', fontStyle: 'italic' }}>Off</div>
               )}

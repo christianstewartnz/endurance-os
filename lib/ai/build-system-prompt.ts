@@ -251,16 +251,18 @@ function buildHealthLayer(health: Record<string, unknown> | null, recentInjuries
   const activeIllnesses = health.illnesses as unknown[]
   const illnessesStr = Array.isArray(activeIllnesses) && activeIllnesses.length
     ? (activeIllnesses as Array<{ name?: string; description?: string; date_start?: string; date_cleared?: string | null; restrictions?: string[]; hrv_impact?: string }>)
+        .map((il, originalIdx) => ({ ...il, originalIdx }))
         .filter((il) => !il.date_cleared)
-        .map((il) => `${il.name ?? 'Illness'} (since ${il.date_start ?? '?'}): ${il.description ?? ''}${il.hrv_impact ? ` — HRV: ${il.hrv_impact}` : ''}${il.restrictions?.length ? ` — restrictions: ${il.restrictions.join(', ')}` : ''}`)
+        .map((il) => `[illness_${il.originalIdx}] ${il.name ?? 'Illness'} (since ${il.date_start ?? '?'}): ${il.description ?? ''}${il.hrv_impact ? ` — HRV: ${il.hrv_impact}` : ''}${il.restrictions?.length ? ` — restrictions: ${il.restrictions.join(', ')}` : ''}`)
         .join('\n  ') || 'None'
     : 'None'
 
   const active = health.active_injuries as unknown[]
   const activeStr = Array.isArray(active) && active.length
     ? (active as Array<{ body_part?: string; description?: string; restrictions?: string[]; date_cleared?: string | null }>)
+        .map((inj, originalIdx) => ({ ...inj, originalIdx }))
         .filter((inj) => !inj.date_cleared)
-        .map((inj) => `${inj.body_part}: ${inj.description}${inj.restrictions?.length ? ` — restrictions: ${inj.restrictions.join(', ')}` : ''}`)
+        .map((inj) => `[active_injury_${inj.originalIdx}] ${inj.body_part}: ${inj.description}${inj.restrictions?.length ? ` — restrictions: ${inj.restrictions.join(', ')}` : ''}`)
         .join('\n  ') || 'None'
     : 'None'
 
@@ -316,27 +318,37 @@ TODAY'S READINESS (${dateLabel})
 ════════════════════════════════════════
 `
   if (w) {
-    section += `
-HRV: ${w.hrv_rmssd ? `${Math.round(w.hrv_rmssd as number)}ms` : '—'} · ${w.hrv_delta_14d_percent != null ? `${Math.round(w.hrv_delta_14d_percent as number)}% vs 14-day baseline` : '—'}
-Resting HR: ${w.resting_hr ? `${Math.round(w.resting_hr as number)}bpm` : '—'}
-Sleep last night: ${w.sleep_hours ? `${(w.sleep_hours as number).toFixed(1)}h` : '—'}
-Form (TSB): ${w.tsb != null ? `${Math.round(w.tsb as number)}` : '—'}
-Body battery: ${w.body_battery ? `${w.body_battery}/100` : '—'}
-
-Readiness assessment: ${readiness}`
+    const lines = [
+      w.hrv_rmssd != null ? `HRV: ${Math.round(w.hrv_rmssd as number)}ms${w.hrv_delta_14d_percent != null ? ` (${Math.round(w.hrv_delta_14d_percent as number)}% vs 14d baseline)` : ''}` : null,
+      w.resting_hr != null ? `Resting HR: ${Math.round(w.resting_hr as number)}bpm` : null,
+      w.sleep_hours != null ? `Sleep: ${(w.sleep_hours as number).toFixed(1)}h` : null,
+      w.body_battery != null ? `Body battery: ${w.body_battery}/100` : null,
+      w.tsb != null ? `Form (TSB): ${Math.round(w.tsb as number)}` : null,
+      w.atl != null ? `ATL (fatigue): ${Math.round(w.atl as number)}` : null,
+      w.ctl != null ? `CTL (fitness): ${Math.round(w.ctl as number)}` : null,
+    ].filter(Boolean)
+    section += `\n${lines.join('\n')}\n\nReadiness assessment: ${readiness}`
   }
 
   if (recent14d.length >= 3) {
     const validHrv = recent14d.filter((w) => (w.hrv_rmssd as number | null) != null)
+    const validRhr = recent14d.filter((w) => (w.resting_hr as number | null) != null)
     const validSleep = recent14d.filter((w) => (w.sleep_hours as number | null) != null)
+    const trendLines: string[] = []
     if (validHrv.length >= 3) {
-      const oldest = validHrv[validHrv.length - 1]?.hrv_rmssd as number
-      const newest = validHrv[0]?.hrv_rmssd as number
-      section += `\n\n14-day wellness trend:\n  HRV: trending ${newest > oldest ? 'up' : 'down'} ${Math.round(oldest)}ms → ${Math.round(newest)}ms over 14 days`
+      const vals = [...validHrv].reverse().map((w) => Math.round(w.hrv_rmssd as number))
+      trendLines.push(`HRV (ms): ${vals.join(', ')}`)
+    }
+    if (validRhr.length >= 3) {
+      const vals = [...validRhr].reverse().map((w) => Math.round(w.resting_hr as number))
+      trendLines.push(`Resting HR (bpm): ${vals.join(', ')}`)
     }
     if (validSleep.length >= 3) {
-      const avgSleep = validSleep.reduce((s, w) => s + (w.sleep_hours as number), 0) / validSleep.length
-      section += `\n  Sleep: averaging ${avgSleep.toFixed(1)}h`
+      const vals = [...validSleep].reverse().map((w) => (w.sleep_hours as number).toFixed(1))
+      trendLines.push(`Sleep (h): ${vals.join(', ')}`)
+    }
+    if (trendLines.length) {
+      section += `\n\n14-day trend (oldest → newest):\n  ${trendLines.join('\n  ')}`
     }
   }
 
@@ -464,11 +476,24 @@ PROCESS:
 
 FORMAT — append at the very end of your message:
 
-For illness (use target_field "illnesses" — NOT "active_injuries"):
+For illness — adding new (use target_field "illnesses"):
 {"context_update":{"target_module":"health_injury","target_field":"illnesses","action_type":"append","suggested_value":"{\"name\":\"Cold\",\"description\":\"Upper respiratory infection\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no training until HRV normalises to within 5% baseline\"],\"date_cleared\":null}","reasoning":"Athlete confirmed cold this week","evidence":"HRV suppressed all week, symptoms improving"}}
 
-For physical injuries (sprains, strains etc — use target_field "active_injuries"):
+For illness — marking resolved (use the [illness_N] index shown in HEALTH & INJURY):
+{"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"archive","suggested_value":"Cold cleared — athlete confirmed symptoms resolved and HRV returning to baseline","reasoning":"Athlete confirmed recovery","evidence":"HRV back within 3% of baseline, symptoms gone"}}
+
+For physical injuries — adding new (use target_field "active_injuries"):
 {"context_update":{"target_module":"health_injury","target_field":"active_injuries","action_type":"append","suggested_value":"{\"body_part\":\"left knee\",\"description\":\"IT band strain\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no running for 4 weeks\"],\"can_cycle\":true,\"can_swim\":true,\"can_strength\":false,\"date_cleared\":null}","reasoning":"Athlete confirmed knee injury","evidence":"Pain on lateral knee during long run, confirmed by physio"}}
+
+For physical injuries — marking resolved (use the [active_injury_N] index shown in HEALTH & INJURY):
+{"context_update":{"target_module":"health_injury","target_field":"active_injury_0","action_type":"archive","suggested_value":"IT band resolved — returned to full running load","reasoning":"Athlete confirmed no pain on long run","evidence":"Completed 18km with no symptoms"}}
+
+For training_patterns — superseding an outdated pattern (target_field = the pattern's id to supersede):
+{"context_update":{"target_module":"training_patterns","target_field":"<pattern-uuid>","action_type":"supersede","suggested_value":"Updated pattern text that replaces the old one","reasoning":"Old pattern no longer accurate","evidence":"..."}}
+
+For removing incorrectly added data:
+{"context_update":{"target_module":"training_patterns","target_field":"<pattern-uuid>","action_type":"remove","suggested_value":"","reasoning":"Pattern was added in error","evidence":"..."}}
+{"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"remove","suggested_value":"","reasoning":"Illness was logged incorrectly","evidence":"..."}}
 
 For plan_dna:
 {"context_update":{"target_module":"plan_dna","target_field":"weekly_structure","action_type":"update_field","suggested_value":"{\"tuesday\":\"quality\",\"friday\":\"quality\",\"sunday\":\"long\",\"monday\":\"easy\",\"wednesday\":\"easy\",\"thursday\":\"easy\",\"saturday\":\"easy\"}","reasoning":"Athlete confirmed weekly structure","evidence":"Agreed in conversation — 9h weekly target"}}
@@ -486,6 +511,13 @@ DISTINCTION — training_patterns vs restrictions:
   NEVER put an instruction like "no training until X" into training_patterns.
   NEVER put an observed tendency into restrictions[].
 
+USING READINESS METRICS IN REASONING:
+When readiness data is available, reference it specifically rather than generically:
+  "Your resting HR of Xbpm is elevated vs your recent range of Y–Zbpm — that's a load signal."
+  "Sleep of Xh last night is below your typical Yh — factor that into today's session expectation."
+  "HRV at Xms is X% below your 14-day baseline — this warrants a conservative approach today."
+Always tie the metric to a concrete coaching decision. Never show raw numbers without context.
+
 RULES:
 - NEVER skip this when agreement is reached
 - NEVER say "I'll note that" without the JSON block
@@ -498,7 +530,7 @@ Allowed target_module values:
   fueling_strategy | health_injury | recovery_preferences | session_notes
 
 Allowed action_type values:
-  append | update_field | archive | replace_array_item
+  append | update_field | archive | supersede | remove | replace_array_item
 
 ════════════════════════════════════════
 READING DECLARATION — MANDATORY

@@ -119,6 +119,97 @@ export async function PATCH(
           .eq('id', targetRecordId)
           .eq('user_id', user.id)
       }
+    } else if (actionType === 'archive' && targetModule === 'health_injury') {
+      const illnessMatch = targetField?.match(/^illness_(\d+)$/)
+      const injuryMatch = targetField?.match(/^active_injury_(\d+)$/)
+      const today = now.split('T')[0]
+
+      if (illnessMatch) {
+        const idx = parseInt(illnessMatch[1], 10)
+        const { data: healthRow } = await admin.from('health_injury').select('illnesses').eq('user_id', user.id).single()
+        const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.illnesses)
+          ? (healthRow as Record<string, unknown>).illnesses as Record<string, unknown>[]
+          : []
+        const target = arr[idx]
+        if (target && !target.date_cleared) {
+          const updated = arr.map((il, i) => i === idx ? { ...il, date_cleared: today, cleared_note: resolvedValue } : il)
+          await admin.from('health_injury').update({ illnesses: updated, updated_at: now }).eq('user_id', user.id)
+          await admin.from('injury_history').insert({
+            user_id: user.id,
+            body_part: 'general',
+            description: `${target.name ?? 'Illness'} — ${target.description ?? ''}`,
+            date_start: target.date_start ?? today,
+            date_resolved: today,
+            resolution: resolvedValue,
+            source: 'ai_conversation',
+            source_conversation_id: s.source_conversation_id ?? null,
+          })
+        }
+      } else if (injuryMatch) {
+        const idx = parseInt(injuryMatch[1], 10)
+        const { data: healthRow } = await admin.from('health_injury').select('active_injuries').eq('user_id', user.id).single()
+        const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.active_injuries)
+          ? (healthRow as Record<string, unknown>).active_injuries as Record<string, unknown>[]
+          : []
+        const target = arr[idx]
+        if (target && !target.date_cleared) {
+          const updated = arr.map((inj, i) => i === idx ? { ...inj, date_cleared: today, cleared_note: resolvedValue } : inj)
+          await admin.from('health_injury').update({ active_injuries: updated, updated_at: now }).eq('user_id', user.id)
+          await admin.from('injury_history').insert({
+            user_id: user.id,
+            body_part: (target.body_part as string) ?? 'general',
+            description: (target.description as string) ?? '',
+            date_start: (target.date_start as string) ?? today,
+            date_resolved: today,
+            resolution: resolvedValue,
+            source: 'ai_conversation',
+            source_conversation_id: s.source_conversation_id ?? null,
+          })
+        }
+      }
+    } else if (actionType === 'supersede' && targetModule === 'training_patterns') {
+      await admin.from('training_patterns').insert({
+        user_id: user.id,
+        pattern_text: resolvedValue,
+        category: 'general',
+        confidence: 'low',
+        observation_count: 1,
+        evidence: s.evidence ?? null,
+        source_conversation_id: s.source_conversation_id ?? null,
+        status: 'active',
+        first_observed_date: now,
+        last_observed_date: now,
+      })
+      if (targetField) {
+        await admin
+          .from('training_patterns')
+          .update({ status: 'superseded', updated_at: now })
+          .eq('id', targetField)
+          .eq('user_id', user.id)
+      }
+    } else if (actionType === 'remove') {
+      if (targetModule === 'training_patterns' && targetField) {
+        await admin.from('training_patterns').delete().eq('id', targetField).eq('user_id', user.id)
+      } else if (targetModule === 'health_injury') {
+        const illnessMatch = targetField?.match(/^illness_(\d+)$/)
+        const injuryMatch = targetField?.match(/^active_injury_(\d+)$/)
+
+        if (illnessMatch) {
+          const idx = parseInt(illnessMatch[1], 10)
+          const { data: healthRow } = await admin.from('health_injury').select('illnesses').eq('user_id', user.id).single()
+          const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.illnesses)
+            ? (healthRow as Record<string, unknown>).illnesses as unknown[]
+            : []
+          await admin.from('health_injury').update({ illnesses: arr.filter((_, i) => i !== idx), updated_at: now }).eq('user_id', user.id)
+        } else if (injuryMatch) {
+          const idx = parseInt(injuryMatch[1], 10)
+          const { data: healthRow } = await admin.from('health_injury').select('active_injuries').eq('user_id', user.id).single()
+          const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.active_injuries)
+            ? (healthRow as Record<string, unknown>).active_injuries as unknown[]
+            : []
+          await admin.from('health_injury').update({ active_injuries: arr.filter((_, i) => i !== idx), updated_at: now }).eq('user_id', user.id)
+        }
+      }
     }
   } catch (err) {
     console.error('[context/suggestions] apply error:', err)

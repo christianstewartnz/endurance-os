@@ -479,7 +479,7 @@ export default function CalendarView({
       </div>
 
       {modalSession && (
-        <SessionModal
+        <SessionOverviewModal
           session={modalSession}
           visible={modalVisible}
           reflectionText={reflectionText}
@@ -723,7 +723,7 @@ function PlannedEventCard({ event }: { event: IntervalEvent }) {
 
 type SessionTab = 'overview' | 'power' | 'pace' | 'stroke' | 'heartrate' | 'laps'
 
-interface SessionModalProps {
+export interface SessionOverviewModalProps {
   session:            SessionNoteRow
   visible:            boolean
   reflectionText:     string
@@ -735,10 +735,10 @@ interface SessionModalProps {
   onCoachOpen:        () => void
 }
 
-function SessionModal({
+export function SessionOverviewModal({
   session, visible, reflectionText, reflectionSaving, reflectionRef,
   onClose, onReflectionChange, onReflectionSave, onCoachOpen,
-}: SessionModalProps) {
+}: SessionOverviewModalProps) {
   const [activeTab, setActiveTab] = useState<SessionTab>('overview')
 
   // Reset tab when session changes
