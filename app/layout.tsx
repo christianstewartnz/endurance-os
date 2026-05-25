@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import CoachRoot from '@/components/coach-root'
 import './globals.css'
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist' })
@@ -39,7 +40,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         />
       </head>
       <body className={`${geist.variable} ${geistMono.variable}`}>
-        {children}
+        <CoachRoot>{children}</CoachRoot>
       </body>
     </html>
   )

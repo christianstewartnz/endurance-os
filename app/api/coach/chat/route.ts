@@ -367,6 +367,12 @@ Your task for this review:
       // Save messages to conversation_messages (conversation row guaranteed above)
       if (validConvId) {
         const lastUserMsg = messages[messages.length - 1]
+        // Strip [read:...] and context_update blocks from stored content
+        const contextUpdateRegex2 = /\{"context_update":\{[\s\S]*?\}\}/g
+        const cleanedAssistantContent = fullText
+          .replace(/\[read:[\w,]+\]\s*$/, '')
+          .replace(contextUpdateRegex2, '')
+          .trim()
         if (lastUserMsg?.role === 'user') {
           await admin.from('conversation_messages').insert([
             {
@@ -377,7 +383,7 @@ Your task for this review:
             {
               conversation_id: validConvId,
               role: 'assistant',
-              content: fullText,
+              content: cleanedAssistantContent,
             },
           ])
         }

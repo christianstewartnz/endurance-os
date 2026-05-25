@@ -3,12 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Icon, Button, Kbd } from '@/components/atoms'
 import { useRouter } from 'next/navigation'
-
-interface Message {
-  id: string
-  role: 'system' | 'ai' | 'user'
-  content: string
-}
+import { useCoach } from '@/lib/context/coach-context'
+import type { Message, ResumedConversation } from '@/lib/context/coach-context'
 
 interface ContextSuggestion {
   id: string
@@ -35,6 +31,14 @@ interface Conversation {
   message_count: number
   created_at: string
   updated_at: string
+}
+
+interface ContextTag {
+  tag: string
+  label: string
+  description: string
+  icon: string
+  group: 'context' | 'today' | 'sessions' | 'races'
 }
 
 function uid(): string {
@@ -87,40 +91,58 @@ function groupConversations(conversations: Conversation[]): {
   return { today, thisWeek, last14Days, archive }
 }
 
-interface CoachPanelProps {
-  onClose: () => void
-  contextType?: 'general' | 'session_review' | 'session_creation' | 'injury'
-  sessionId?: string
-  initialMessage?: string
+// Detect current @word being typed
+function getAtMention(text: string, cursorPos: number): { word: string; start: number } | null {
+  const before = text.slice(0, cursorPos)
+  const match = before.match(/@([\w-]*)$/)
+  if (!match) return null
+  return { word: match[1], start: before.length - match[0].length }
 }
 
-export default function CoachPanel({ onClose, contextType = 'general', sessionId, initialMessage }: CoachPanelProps) {
+export default function CoachPanel() {
   const router = useRouter()
+  const {
+    messages, setMessages,
+    conversationId, setConversationId,
+    conversationTitle, setConversationTitle,
+    setIsOpen,
+    startNewConversation: contextStartNew,
+    activeThread, setActiveThread,
+    resumedConversation, setResumedConversation,
+  } = useCoach()
+
   const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat')
-  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [conversationId, setConversationId] = useState(() => crypto.randomUUID())
-  const [conversationTitle, setConversationTitle] = useState<string | null>(null)
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
-  const [loadedModules, setLoadedModules] = useState<string[]>([])
   const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [availableTags, setAvailableTags] = useState<ContextTag[]>([])
+  const [showTagDropdown, setShowTagDropdown] = useState(false)
+  const [tagQuery, setTagQuery] = useState('')
+  const [tagDropdownIndex, setTagDropdownIndex] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const tagAnchorRef = useRef<number>(0)
 
   useEffect(() => {
     fetch('/api/keys/anthropic')
       .then((r) => r.json())
       .then((d) => {
         setHasApiKey((d as { connected: boolean }).connected)
-        if ((d as { connected: boolean }).connected) {
-          setLoadedModules(['@todayshrv', '@plandna', '@patterns'])
-        }
       })
       .catch(() => setHasApiKey(false))
+  }, [])
+
+  // Fetch available @ tags on mount
+  useEffect(() => {
+    fetch('/api/coach/context-tags')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.tags) setAvailableTags(d.tags) })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -130,11 +152,20 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
   }, [messages, isStreaming, inlineCards])
 
   useEffect(() => {
-    if (initialMessage && hasApiKey) {
-      sendMessage(initialMessage)
+    if (activeTab === 'history') loadHistory()
+  }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ⌘⇧N — new conversation
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        handleNewConversation()
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasApiKey])
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadHistory = useCallback(async () => {
     setIsLoadingHistory(true)
@@ -149,24 +180,20 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
     }
   }, [])
 
-  useEffect(() => {
-    if (activeTab === 'history') loadHistory()
-  }, [activeTab, loadHistory])
-
-  const startNewConversation = useCallback(() => {
+  function handleNewConversation() {
     if (abortRef.current) abortRef.current.abort()
-    setMessages([])
+    contextStartNew()
     setInlineCards([])
     setInput('')
-    setConversationId(crypto.randomUUID())
-    setConversationTitle(null)
     setActiveTab('chat')
-  }, [])
+  }
 
   const loadConversation = useCallback(async (conv: Conversation) => {
     setActiveTab('chat')
     setConversationId(conv.id)
     setConversationTitle(conv.title)
+    setActiveThread(conv.id)
+    setResumedConversation({ id: conv.id, title: conv.title, updated_at: conv.updated_at })
     setMessages([])
     setInlineCards([])
     setInput('')
@@ -188,7 +215,76 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
     } catch {
       // ignore
     }
-  }, [])
+  }, [setConversationId, setConversationTitle, setActiveThread, setResumedConversation, setMessages])
+
+  const filteredTags = availableTags.filter((t) =>
+    tagQuery === '' || t.tag.toLowerCase().includes(tagQuery.toLowerCase()) || t.label.toLowerCase().includes(tagQuery.toLowerCase())
+  ).slice(0, 8)
+
+  function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const val = e.target.value
+    const cursor = e.target.selectionStart ?? val.length
+    setInput(val)
+
+    const mention = getAtMention(val, cursor)
+    if (mention) {
+      setTagQuery(mention.word)
+      setTagAnchor(mention.start)
+      setShowTagDropdown(true)
+      setTagDropdownIndex(0)
+    } else {
+      setShowTagDropdown(false)
+    }
+  }
+
+  function setTagAnchor(pos: number) {
+    tagAnchorRef.current = pos
+  }
+
+  function insertTag(tag: ContextTag) {
+    const cursor = textareaRef.current?.selectionStart ?? input.length
+    const before = input.slice(0, tagAnchorRef.current)
+    const after = input.slice(cursor)
+    const newVal = before + tag.tag + ' ' + after
+    setInput(newVal)
+    setShowTagDropdown(false)
+    setTagQuery('')
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const pos = before.length + tag.tag.length + 1
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(pos, pos)
+      }
+    }, 0)
+  }
+
+  function handleInputKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (showTagDropdown && filteredTags.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setTagDropdownIndex((i) => Math.min(i + 1, filteredTags.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setTagDropdownIndex((i) => Math.max(i - 1, 0))
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        insertTag(filteredTags[tagDropdownIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        setShowTagDropdown(false)
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendMessage(input)
+    }
+  }
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isStreaming) return
@@ -225,8 +321,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
         body: JSON.stringify({
           messages: historyForApi,
           conversationId,
-          contextType,
-          sessionId,
+          contextType: 'general',
         }),
         signal: abort.signal,
       })
@@ -283,13 +378,24 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
         }
       }
 
+      // Parse [read:...] declaration
+      const readMatch = fullText.match(/\[read:([\w,]+)\]\s*$/)
+      const modulesRead = readMatch ? readMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : []
+
+      // Strip [read:...] and context_update blocks from displayed text
       const contextUpdateRegex = /\{"context_update":\{[\s\S]*?\}\}/g
-      const allMatches = fullText.match(contextUpdateRegex)
+      let displayText = fullText.replace(/\[read:[\w,]+\]\s*$/, '').trim()
+      const allMatches = displayText.match(contextUpdateRegex)
       if (allMatches && allMatches.length > 0) {
-        const displayText = fullText.replace(contextUpdateRegex, '').trim()
-        setMessages((prev) =>
-          prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText } : m)
-        )
+        displayText = displayText.replace(contextUpdateRegex, '').trim()
+      }
+
+      setMessages((prev) =>
+        prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText, modulesRead } : m)
+      )
+
+      // Show inline suggestion cards if context updates were found
+      if (allMatches && allMatches.length > 0) {
         try {
           const pendingRes = await fetch('/api/context/suggestions/pending')
           const { suggestions } = await pendingRes.json() as {
@@ -327,7 +433,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
       setIsStreaming(false)
       abortRef.current = null
     }
-  }, [messages, isStreaming, conversationId, conversationTitle, contextType, sessionId])
+  }, [messages, isStreaming, conversationId, conversationTitle, setMessages, setConversationTitle])
 
   async function handleSuggestionAction(cardIdx: number, action: 'accept' | 'reject' | 'edit', editedValue?: string) {
     const card = inlineCards[cardIdx]
@@ -351,8 +457,6 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
     }
   }
 
-  const moduleLabel = loadedModules.join(' · ')
-
   if (hasApiKey === false) {
     return (
       <aside style={{
@@ -371,7 +475,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em' }}>Coach</div>
           </div>
-          <Button kind="ghost" size="sm" icon="x" onClick={onClose} />
+          <Button kind="ghost" size="sm" icon="x" onClick={() => setIsOpen(false)} />
         </div>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', gap: 16 }}>
           <div style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -403,7 +507,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
     }}>
       {/* Header */}
       <div style={{ padding: '12px 16px 0', borderBottom: '1px solid var(--border-subtle)' }}>
-        {/* Top row: icon + title + close */}
+        {/* Top row: icon + title + action buttons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Icon name="sparkles" size={13} color="var(--ai)" />
@@ -416,14 +520,25 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
             ) : (
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.005em' }}>History</div>
             )}
-            {activeTab === 'chat' && moduleLabel && (
-              <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                <span style={{ color: 'var(--ai)' }}>●</span> Reading:{' '}
-                <span style={{ fontFamily: 'var(--font-mono)' }}>{moduleLabel}</span>
-              </div>
-            )}
           </div>
-          <Button kind="ghost" size="sm" icon="x" onClick={onClose} />
+          {/* + New and × Close */}
+          <button
+            title="New conversation (⌘⇧N)"
+            onClick={handleNewConversation}
+            style={{
+              width: 26, height: 26, borderRadius: 6,
+              background: 'transparent', border: '1px solid var(--border-default)',
+              color: 'var(--fg-3)', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'color var(--dur-micro), background var(--dur-micro)',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-1)'; (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-2)' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-3)'; (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+          >
+            <Icon name="plus" size={13} />
+          </button>
+          <Button kind="ghost" size="sm" icon="x" onClick={() => setIsOpen(false)} />
         </div>
 
         {/* Tab toggle */}
@@ -445,6 +560,31 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
         <>
           {/* Messages */}
           <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Resumed conversation banner */}
+            {resumedConversation && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 10px', borderRadius: 7,
+                background: 'rgba(139,124,246,0.08)', border: '1px solid rgba(139,124,246,0.2)',
+                fontSize: 12, color: 'var(--fg-3)',
+              }}>
+                <Icon name="clock-counter-clockwise" size={12} color="var(--ai)" />
+                <span style={{ flex: 1 }}>
+                  Resumed · {timeAgo(resumedConversation.updated_at)}
+                </span>
+                <button
+                  onClick={handleNewConversation}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    fontSize: 11, color: 'var(--ai)', padding: 0,
+                    fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 3,
+                  }}
+                >
+                  Start new <Icon name="arrow-square-out" size={10} color="var(--ai)" />
+                </button>
+              </div>
+            )}
+
             {messages.length === 0 && !isStreaming && hasApiKey && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 8, textAlign: 'center', color: 'var(--fg-3)', fontSize: 13 }}>
                 <Icon name="sparkles" size={20} color="var(--ai)" />
@@ -476,16 +616,29 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
           {/* Composer */}
           <div style={{ padding: '12px 14px 14px', borderTop: '1px solid var(--border-subtle)' }}>
             <div style={{
+              position: 'relative',
               display: 'flex', flexDirection: 'column',
               background: 'var(--bg-2)',
               border: '1px solid var(--border-default)',
               borderRadius: 10,
               padding: '10px 12px',
             }}>
+              {/* @ Tag dropdown */}
+              {showTagDropdown && filteredTags.length > 0 && (
+                <TagDropdown
+                  tags={filteredTags}
+                  selectedIndex={tagDropdownIndex}
+                  onSelect={insertTag}
+                  onClose={() => setShowTagDropdown(false)}
+                />
+              )}
+
               <textarea
+                ref={textareaRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
+                onChange={handleInputChange}
+                onKeyDown={handleInputKeyDown}
+                onBlur={() => { setTimeout(() => setShowTagDropdown(false), 150) }}
                 placeholder="Ask about today's session, this week, or anything in your training…"
                 rows={2}
                 disabled={isStreaming}
@@ -496,7 +649,7 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
                 }}
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                <span style={{ fontSize: 10, color: 'var(--fg-4)', marginLeft: 4 }}>@plan, @session, @week</span>
+                <span style={{ fontSize: 10, color: 'var(--fg-4)', marginLeft: 4, fontFamily: 'var(--font-mono)' }}>@ for context</span>
                 <div style={{ flex: 1 }} />
                 <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
                   <Kbd>↵</Kbd> send
@@ -525,12 +678,80 @@ export default function CoachPanel({ onClose, contextType = 'general', sessionId
           conversations={conversations}
           isLoading={isLoadingHistory}
           searchQuery={searchQuery}
+          activeConversationId={conversationId}
           onSearchChange={setSearchQuery}
-          onNewConversation={startNewConversation}
+          onNewConversation={handleNewConversation}
           onLoadConversation={loadConversation}
         />
       )}
     </aside>
+  )
+}
+
+function TagDropdown({ tags, selectedIndex, onSelect, onClose }: {
+  tags: ContextTag[]
+  selectedIndex: number
+  onSelect: (tag: ContextTag) => void
+  onClose: () => void
+}) {
+  const groups = [
+    { key: 'context', label: 'Context' },
+    { key: 'today', label: 'Today' },
+    { key: 'sessions', label: 'Sessions' },
+    { key: 'races', label: 'Races' },
+  ] as const
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: 6,
+      background: 'var(--bg-2)', border: '1px solid var(--border-default)',
+      borderRadius: 8, maxHeight: 260, overflowY: 'auto', zIndex: 100,
+      boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+    }}>
+      {groups.map((g) => {
+        const groupTags = tags.filter((t) => t.group === g.key)
+        if (!groupTags.length) return null
+        return (
+          <div key={g.key}>
+            <div style={{ padding: '6px 12px 2px', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {g.label}
+            </div>
+            {groupTags.map((tag, i) => {
+              const globalIdx = tags.indexOf(tag)
+              return (
+                <div
+                  key={tag.tag}
+                  onMouseDown={(e) => { e.preventDefault(); onSelect(tag) }}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 10,
+                    padding: '6px 12px', cursor: 'pointer',
+                    background: globalIdx === selectedIndex ? 'var(--bg-3)' : 'transparent',
+                    transition: 'background var(--dur-micro)',
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-3)' }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLDivElement).style.background = globalIdx === selectedIndex ? 'var(--bg-3)' : 'transparent'
+                  }}
+                >
+                  <div style={{ paddingTop: 1 }}>
+                    <Icon name={tag.icon} size={13} color="var(--fg-3)" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--ai)', fontWeight: 500 }}>{tag.tag}</span>
+                      <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>{tag.label}</span>
+                    </div>
+                    {tag.description && (
+                      <div style={{ fontSize: 11, color: 'var(--fg-4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tag.description}</div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -561,6 +782,7 @@ function HistoryTab({
   conversations,
   isLoading,
   searchQuery,
+  activeConversationId,
   onSearchChange,
   onNewConversation,
   onLoadConversation,
@@ -568,6 +790,7 @@ function HistoryTab({
   conversations: Conversation[]
   isLoading: boolean
   searchQuery: string
+  activeConversationId: string
   onSearchChange: (q: string) => void
   onNewConversation: () => void
   onLoadConversation: (c: Conversation) => void
@@ -586,10 +809,10 @@ function HistoryTab({
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Search + New */}
-      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 7, padding: '5px 10px' }}>
-          <Icon name="search" size={12} color="var(--fg-4)" />
+      {/* Search */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 7, padding: '5px 10px' }}>
+          <Icon name="magnifying-glass" size={12} color="var(--fg-4)" />
           <input
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
@@ -605,7 +828,6 @@ function HistoryTab({
             </button>
           )}
         </div>
-        <Button kind="ghost" size="sm" icon="plus" onClick={onNewConversation}>New</Button>
       </div>
 
       {/* List */}
@@ -618,10 +840,10 @@ function HistoryTab({
           </div>
         ) : (
           <>
-            <ConversationGroup label="Today" items={groups.today} onLoad={onLoadConversation} showArchiveButton={false} />
-            <ConversationGroup label="This week" items={groups.thisWeek} onLoad={onLoadConversation} showArchiveButton={false} />
-            <ConversationGroup label="Last 14 days" items={groups.last14Days} onLoad={onLoadConversation} showArchiveButton={false} />
-            <ConversationGroup label="Archive" items={groups.archive} onLoad={onLoadConversation} showArchiveButton={true} />
+            <ConversationGroup label="Today" items={groups.today} activeId={activeConversationId} onLoad={onLoadConversation} showArchiveButton={false} />
+            <ConversationGroup label="This week" items={groups.thisWeek} activeId={activeConversationId} onLoad={onLoadConversation} showArchiveButton={false} />
+            <ConversationGroup label="Last 14 days" items={groups.last14Days} activeId={activeConversationId} onLoad={onLoadConversation} showArchiveButton={false} />
+            <ConversationGroup label="Archive" items={groups.archive} activeId={activeConversationId} onLoad={onLoadConversation} showArchiveButton={true} />
           </>
         )}
       </div>
@@ -632,11 +854,13 @@ function HistoryTab({
 function ConversationGroup({
   label,
   items,
+  activeId,
   onLoad,
   showArchiveButton,
 }: {
   label: string
   items: Conversation[]
+  activeId: string
   onLoad: (c: Conversation) => void
   showArchiveButton: boolean
 }) {
@@ -648,7 +872,7 @@ function ConversationGroup({
         {label}
       </div>
       {items.map((c) => (
-        <ConversationRow key={c.id} conversation={c} onLoad={onLoad} showArchiveButton={showArchiveButton} />
+        <ConversationRow key={c.id} conversation={c} activeId={activeId} onLoad={onLoad} showArchiveButton={showArchiveButton} />
       ))}
     </div>
   )
@@ -656,20 +880,29 @@ function ConversationGroup({
 
 function ConversationRow({
   conversation: c,
+  activeId,
   onLoad,
   showArchiveButton,
 }: {
   conversation: Conversation
+  activeId: string
   onLoad: (c: Conversation) => void
   showArchiveButton: boolean
 }) {
+  const isActive = c.id === activeId
+  const now = new Date()
+  const updatedAt = new Date(c.updated_at)
+  const isInProgress = !isActive && (now.getTime() - updatedAt.getTime()) < 3600000
+
   return (
     <div
       style={{
         padding: '8px 16px',
         cursor: 'pointer',
         borderBottom: '1px solid var(--border-subtle)',
+        borderLeft: isActive ? '2px solid var(--ai)' : '2px solid transparent',
         transition: 'background var(--dur-micro) var(--ease-out)',
+        paddingLeft: isActive ? 14 : 16,
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-2)' }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
@@ -690,8 +923,17 @@ function ConversationRow({
           {c.message_count ?? 0} message{(c.message_count ?? 0) !== 1 ? 's' : ''}
         </div>
       )}
-      {showArchiveButton && (
-        <div style={{ marginTop: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+        {isInProgress && (
+          <span style={{
+            fontSize: 10, color: 'var(--ai)', background: 'rgba(139,124,246,0.12)',
+            border: '1px solid rgba(139,124,246,0.25)', borderRadius: 4,
+            padding: '1px 6px', fontWeight: 500,
+          }}>
+            In progress
+          </span>
+        )}
+        {showArchiveButton && (
           <button
             onClick={(e) => { e.stopPropagation(); onLoad(c) }}
             style={{
@@ -702,8 +944,8 @@ function ConversationRow({
           >
             Load full conversation
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
@@ -743,14 +985,29 @@ function ChatMessage({ m, isStreaming }: { m: Message; isStreaming: boolean }) {
         {m.content === '' && isStreaming ? (
           <TypingDots />
         ) : (
-          <div style={{
-            background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)',
-            borderRadius: 10, padding: '10px 12px',
-            fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap',
-          }}>
-            {m.content}
-            {isStreaming && <span style={{ opacity: 0.5, animation: 'blink 1s infinite' }}>▊</span>}
-          </div>
+          <>
+            <div style={{
+              background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)',
+              borderRadius: 10, padding: '10px 12px',
+              fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap',
+            }}>
+              {m.content}
+              {isStreaming && <span style={{ opacity: 0.5, animation: 'blink 1s infinite' }}>▊</span>}
+            </div>
+            {m.modulesRead && m.modulesRead.length > 0 && !isStreaming && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5 }}>
+                {m.modulesRead.map((mod) => (
+                  <span key={mod} style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 11,
+                    color: 'var(--ai)', background: 'rgba(139,124,246,0.1)',
+                    borderRadius: 4, padding: '1px 6px',
+                  }}>
+                    @{mod}
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
       <style>{`@keyframes blink { 0%, 50% { opacity: 1 } 51%, 100% { opacity: 0 } }`}</style>

@@ -6,6 +6,7 @@ import Sidebar from '@/components/sidebar'
 import CoachPanel from '@/components/coach-panel'
 import CommandPalette from '@/components/command-palette'
 import { Button, Kbd, Avatar } from '@/components/atoms'
+import { useCoach } from '@/lib/context/coach-context'
 
 // Coach panel context — lets any nested component open the panel
 const CoachCtx = createContext({ openCoach: () => {} })
@@ -55,7 +56,7 @@ function deriveDisplayName(name?: string, email?: string): string {
 
 export default function AppShell({ children, fullWidth = false, userName, userEmail }: AppShellProps) {
   const pathname = usePathname()
-  const [coachOpen, setCoachOpen] = useState(true)
+  const { isOpen, setIsOpen } = useCoach()
   const [cmdOpen, setCmdOpen] = useState(false)
 
   useEffect(() => {
@@ -66,12 +67,12 @@ export default function AppShell({ children, fullWidth = false, userName, userEm
       }
       if ((e.metaKey || e.ctrlKey) && e.key === '/') {
         e.preventDefault()
-        setCoachOpen((o) => !o)
+        setIsOpen(!isOpen)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [isOpen, setIsOpen])
 
   const routeName = ROUTE_NAMES[pathname] ?? 'Dashboard'
   const displayName = deriveDisplayName(userName, userEmail)
@@ -79,7 +80,7 @@ export default function AppShell({ children, fullWidth = false, userName, userEm
   const breadcrumb = [displayName, routeName]
 
   return (
-    <CoachCtx.Provider value={{ openCoach: () => setCoachOpen(true) }}>
+    <CoachCtx.Provider value={{ openCoach: () => setIsOpen(true) }}>
       <div className="app-shell">
         <Sidebar onSearch={() => setCmdOpen(true)} />
 
@@ -101,10 +102,10 @@ export default function AppShell({ children, fullWidth = false, userName, userEm
                 Search… <Kbd>⌘K</Kbd>
               </Button>
               <Button
-                kind={coachOpen ? 'ai' : 'ghost'}
+                kind={isOpen ? 'ai' : 'ghost'}
                 size="sm"
                 icon="sparkles"
-                onClick={() => setCoachOpen((o) => !o)}
+                onClick={() => setIsOpen(!isOpen)}
               >
                 Coach <Kbd>⌘/</Kbd>
               </Button>
@@ -118,7 +119,7 @@ export default function AppShell({ children, fullWidth = false, userName, userEm
           </div>
         </main>
 
-        {coachOpen && <CoachPanel onClose={() => setCoachOpen(false)} />}
+        {isOpen && <CoachPanel />}
 
         <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
       </div>

@@ -501,6 +501,26 @@ Allowed action_type values:
   append | update_field | archive | replace_array_item
 
 ════════════════════════════════════════
+READING DECLARATION — MANDATORY
+════════════════════════════════════════
+
+After EVERY response, append on the final line (after any JSON blocks):
+[read:module1,module2,module3]
+
+Use these module names exactly:
+  athlete, plandna, patterns, rules, races, health, fueling, recovery,
+  todayshrv, readiness, form, thisweek, lastsession, lastride, lastrun,
+  lastswim, last7days, last28days, coachstyle
+
+Include every module you actually consulted to generate this response.
+Do not list modules you did not use.
+
+Examples:
+  [read:todayshrv,plandna,patterns]
+  [read:health,todayshrv,lastride]
+  [read:races,plandna,fueling]
+
+════════════════════════════════════════
 END OF CONTEXT
 ════════════════════════════════════════`
 }
