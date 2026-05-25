@@ -210,8 +210,8 @@ function ZoneBar({ zones, fallbackColor, height = 6 }: {
   const total = segments.reduce((s, z) => s + z.secs, 0)
   return (
     <div style={{ display: 'flex', height, borderRadius: height / 2, overflow: 'hidden', gap: 1 }}>
-      {segments.map(seg => (
-        <div key={seg.id} style={{ flex: seg.secs / total, background: seg.color }} />
+      {segments.map((seg, i) => (
+        <div key={i} style={{ flex: seg.secs / total, background: seg.color }} />
       ))}
     </div>
   )
@@ -222,8 +222,8 @@ function ZoneLabels({ zones }: { zones: unknown }) {
   if (!segments) return null
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 8 }}>
-      {segments.map(seg => (
-        <div key={seg.id} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      {segments.map((seg, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
           <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
             Z{seg.id} · {formatDuration(seg.secs)}
