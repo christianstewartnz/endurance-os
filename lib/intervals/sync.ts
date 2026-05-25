@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createIntervalsClient, IntervalsApiError } from './client'
-import type { IntervalWellness, IntervalActivity } from './types'
+import type { IntervalsClient } from './client'
+import type { IntervalWellness, IntervalActivity, IntervalActivityDetail } from './types'
 
 function daysAgo(n: number): string {
   const d = new Date(Date.now() - n * 86400000)
@@ -62,6 +63,35 @@ function extractBestPower(gaps: unknown, targetSecs: number): number | null {
     (g) => g.secs === targetSecs
   )
   return typeof entry?.watts === 'number' ? entry.watts : null
+}
+
+// Strip leading 'i' from intervals.icu activity IDs for URL path and map keys.
+// List endpoint returns ids like "i150683451"; detail endpoint expects and returns "150683451".
+function normalizeActivityId(id: string): string {
+  return id.replace(/^i/, '')
+}
+
+async function fetchDetailsBatched(
+  client: IntervalsClient,
+  activityIds: string[],
+  batchSize = 5,
+  delayMs = 500,
+): Promise<(IntervalActivityDetail | null)[]> {
+  const results: (IntervalActivityDetail | null)[] = []
+  for (let i = 0; i < activityIds.length; i += batchSize) {
+    const batch = activityIds.slice(i, i + batchSize)
+    const details = await Promise.all(
+      batch.map((id) =>
+        client.getActivityDetail(id)
+          .catch((e) => { console.error('[intervals] Failed to fetch detail for:', id, e); return null })
+      )
+    )
+    results.push(...details)
+    if (i + batchSize < activityIds.length) {
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+  }
+  return results
 }
 
 export async function syncWellness(userId: string): Promise<void> {
@@ -132,30 +162,36 @@ export async function syncActivities(userId: string): Promise<void> {
     return
   }
 
-  // Fetch detail for each activity in parallel to get interval/lap data
-  const detailResults = await Promise.allSettled(
-    activities.map((a) => client.getActivityDetail(String(a.id)))
+  const activityIds = activities.map((a) => String(a.id))
+  console.log(`[intervals] Fetching details for ${activityIds.length} activities...`)
+  const detailsList = await fetchDetailsBatched(client, activityIds)
+
+  // Key by normalized (no 'i' prefix) ID so lookup matches both list and detail id formats
+  const detailMap = new Map(
+    detailsList
+      .filter((d): d is IntervalActivityDetail => d !== null)
+      .map((d) => [normalizeActivityId(String(d.id)), d])
   )
 
-  const rows = activities.map((a, idx) => {
-    const detailResult = detailResults[idx]
-    const detail = detailResult.status === 'fulfilled' ? detailResult.value : null
+  const roundOrNull = (v: number | null | undefined) => v != null ? Math.round(v) : null
+
+  const rows = activities.map((a) => {
+    const detail = detailMap.get(normalizeActivityId(String(a.id))) ?? null
 
     const sport = mapActivityType(a.type)
-    const isRun = sport === 'running'
+    const isRun  = sport === 'running'
+    const isSwim = sport === 'swimming'
 
     const avgSpeedKph = a.average_speed != null ? a.average_speed * 3.6 : null
     const maxSpeedKph = a.max_speed != null ? a.max_speed * 3.6 : null
-    const totalWorkKj = a.total_work != null ? Math.round(a.total_work / 1000) : null
 
+    // Store pace as seconds/km for running
     const pacePerKm =
       isRun && a.distance && a.elapsed_time
-        ? (a.elapsed_time / 60) / (a.distance / 1000)
+        ? a.elapsed_time / (a.distance / 1000)
         : null
 
     const gaps = a.icu_gaps ?? null
-    const best20minPower = extractBestPower(gaps, 1200)
-    const best60minPower = extractBestPower(gaps, 3600)
 
     return {
       user_id: userId,
@@ -164,19 +200,28 @@ export async function syncActivities(userId: string): Promise<void> {
       session_type: sport,
       sport,
       // Core
-      actual_tss: a.icu_training_load ?? null,
-      actual_duration_seconds: a.elapsed_time ?? null,
-      avg_hr: a.average_heartrate ?? null,
-      max_hr: a.max_heartrate ?? null,
+      actual_tss: roundOrNull(a.icu_training_load),
+      actual_duration_seconds: roundOrNull(a.elapsed_time),
+      avg_hr: roundOrNull(a.average_heartrate),
+      max_hr: roundOrNull(a.max_heartrate),
       cardiac_drift_percent: a.cardiac_drift_percent ?? null,
       is_archived: false,
-      // Power
-      avg_power_watts: a.average_watts ?? null,
-      normalized_power_watts: a.weighted_average_watts ?? null,
-      max_power_watts: a.max_watts ?? null,
-      total_work_kj: totalWorkKj,
-      best_20min_power: best20minPower,
-      best_60min_power: best60minPower,
+      // Power — detail endpoint fields (icu_average_watts / icu_weighted_avg_watts)
+      avg_power_watts: detail?.icu_average_watts != null
+        ? Math.round(detail.icu_average_watts)
+        : roundOrNull(a.average_watts),
+      normalized_power_watts: detail?.icu_weighted_avg_watts != null
+        ? Math.round(detail.icu_weighted_avg_watts)
+        : roundOrNull(a.weighted_average_watts),
+      max_power_watts: detail?.max_watts != null ? Math.round(detail.max_watts) : roundOrNull(a.max_watts),
+      total_work_kj: detail?.total_work != null
+        ? Math.round(detail.total_work / 1000)
+        : a.total_work != null ? Math.round(a.total_work / 1000) : null,
+      best_20min_power: detail?.icu_20min_watts != null ? Math.round(detail.icu_20min_watts) : extractBestPower(gaps, 1200),
+      best_60min_power: detail?.icu_60min_watts != null ? Math.round(detail.icu_60min_watts) : extractBestPower(gaps, 3600),
+      best_5min_power:  detail?.icu_5min_watts  != null ? Math.round(detail.icu_5min_watts)  : null,
+      best_1min_power:  detail?.icu_1min_watts  != null ? Math.round(detail.icu_1min_watts)  : null,
+      best_5sec_power:  detail?.icu_5sec_watts  != null ? Math.round(detail.icu_5sec_watts)  : null,
       // Training metrics
       intensity_factor: a.icu_intensity ?? null,
       variability_index: a.icu_variability ?? null,
@@ -188,18 +233,40 @@ export async function syncActivities(userId: string): Promise<void> {
       elevation_gain_meters: a.total_elevation_gain ?? null,
       avg_speed_kph: avgSpeedKph,
       max_speed_kph: maxSpeedKph,
-      avg_cadence: a.average_cadence ?? null,
+      avg_cadence: !isSwim ? roundOrNull(a.average_cadence) : null,
       pace_per_km: pacePerKm,
+      // Running best paces (seconds/km)
+      best_1km_pace:          detail?.icu_1km_pace           ?? null,
+      best_5km_pace:          detail?.icu_5km_pace           ?? null,
+      best_10km_pace:         detail?.icu_10km_pace          ?? null,
+      best_half_marathon_pace: detail?.icu_half_marathon_pace ?? null,
+      // Swimming
+      best_100m_pace:         detail?.icu_100m_pace          ?? null,
+      best_400m_pace:         detail?.icu_400m_pace          ?? null,
+      pool_length:            a.pool_length                  ?? null,
+      total_strokes:          a.total_strokes                ?? null,
+      avg_stroke_rate:        a.average_stroke_rate          ?? null,
+      avg_strokes_per_length: detail?.avg_strokes_per_length ?? null,
       // Other
-      calories: a.calories ?? null,
+      calories: roundOrNull(a.calories),
       avg_temperature: a.average_temp ?? null,
       activity_name: a.name ?? null,
-      // JSONB
-      zones: a.icu_zones ?? null,
+      // JSONB — zones and intervals from detail
+      zones: (() => {
+        const power = detail?.icu_zone_times ?? null
+        const hrRaw = detail?.icu_hr_zone_times ?? null
+        const hr = Array.isArray(hrRaw)
+          ? (hrRaw as number[]).map((secs, i) => ({ id: `Z${i + 1}`, secs })).filter(z => z.secs > 0)
+          : null
+        if (!power && !hr) return null
+        return { power, hr }
+      })(),
       gaps: gaps,
-      intervals_data: detail ?? null,
+      intervals_data: detail?.icu_groups ?? detail?.icu_intervals ?? null,
     }
   })
+
+  console.log(`[intervals] Sync complete — ${rows.length} activities updated`)
 
   const { error } = await supabase
     .from('session_notes')

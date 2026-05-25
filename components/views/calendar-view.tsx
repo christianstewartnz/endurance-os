@@ -133,16 +133,23 @@ function formatDistance(meters: number | null | undefined): string {
   return `${Math.round(meters)} m`
 }
 
-function formatPace(pacePerKm: number | null | undefined): string {
-  if (!pacePerKm) return '—'
-  const mins = Math.floor(pacePerKm)
-  const secs = Math.round((pacePerKm - mins) * 60)
+function formatPace(secsPerKm: number | null | undefined): string {
+  if (!secsPerKm) return '—'
+  const mins = Math.floor(secsPerKm / 60)
+  const secs = Math.round(secsPerKm % 60)
   return `${mins}:${String(secs).padStart(2, '0')} /km`
+}
+
+function formatPace100m(secsPerHundred: number | null | undefined): string {
+  if (!secsPerHundred) return '—'
+  const mins = Math.floor(secsPerHundred / 60)
+  const secs = Math.round(secsPerHundred % 60)
+  return `${mins}:${String(secs).padStart(2, '0')} /100m`
 }
 
 function speedToPace(speedMps: number | null | undefined): number | null {
   if (!speedMps || speedMps <= 0) return null
-  return (1000 / speedMps) / 60
+  return 1000 / speedMps
 }
 
 // ── Domain helpers ────────────────────────────────────────────────────────────
@@ -164,14 +171,33 @@ interface ZoneSegment { id: number; secs: number; color: string }
 
 function parseZoneSegments(zones: unknown): ZoneSegment[] | null {
   if (!Array.isArray(zones) || zones.length === 0) return null
-  const valid = (zones as Record<string, unknown>[]).filter(
-    (z) => typeof z?.secs === 'number' && (z.secs as number) > 0
-  )
+  const getTime = (z: Record<string, unknown>): number | null => {
+    if (typeof z.secs === 'number' && z.secs > 0) return z.secs
+    if (typeof z.seconds === 'number' && z.seconds > 0) return z.seconds
+    return null
+  }
+  const valid = (zones as Record<string, unknown>[]).filter((z) => getTime(z) !== null)
   if (valid.length === 0) return null
   return valid.map((z) => {
-    const id = typeof z.id === 'number' ? (z.id as number) : 1
-    return { id, secs: z.secs as number, color: ZONE_COLORS[Math.min(id - 1, 4)] }
+    // id may be a number or a string like "Z1"
+    const rawId = z.id
+    const id = typeof rawId === 'number'
+      ? rawId
+      : typeof rawId === 'string'
+        ? (parseInt(rawId.replace(/\D/g, ''), 10) || 1)
+        : 1
+    return { id, secs: getTime(z)!, color: ZONE_COLORS[Math.min(id - 1, ZONE_COLORS.length - 1)] }
   })
+}
+
+// Extract power or hr zone array from the structured zones JSONB
+function getPowerZones(zones: unknown): unknown {
+  if (!zones || typeof zones !== 'object' || Array.isArray(zones)) return zones
+  return (zones as Record<string, unknown>).power ?? null
+}
+function getHrZones(zones: unknown): unknown {
+  if (!zones || typeof zones !== 'object' || Array.isArray(zones)) return null
+  return (zones as Record<string, unknown>).hr ?? null
 }
 
 function ZoneBar({ zones, fallbackColor, height = 6 }: {
@@ -223,9 +249,14 @@ interface LapData {
 }
 
 function parseLaps(data: unknown): LapData[] | null {
-  if (!data || typeof data !== 'object') return null
-  const obj = data as Record<string, unknown>
-  const groups = Array.isArray(obj.icu_groups) ? obj.icu_groups : null
+  if (!data) return null
+  let groups: unknown[] | null = null
+  if (Array.isArray(data)) {
+    groups = data
+  } else if (typeof data === 'object') {
+    const obj = data as Record<string, unknown>
+    groups = Array.isArray(obj.icu_groups) ? obj.icu_groups : null
+  }
   if (!groups || groups.length === 0) return null
   return (groups as Record<string, unknown>[]).map((g, i) => ({
     name: typeof g.name === 'string' ? g.name : `Lap ${i + 1}`,
@@ -657,7 +688,7 @@ function SessionCard({ session, isSelected, onClick }: {
       </div>
 
       {/* Zone bar — uses real zone data if available */}
-      <ZoneBar zones={session.zones} fallbackColor={sportColor} height={3} />
+      <ZoneBar zones={session.sport === 'cycling' ? getPowerZones(session.zones) : getHrZones(session.zones)} fallbackColor={sportColor} height={3} />
     </div>
   )
 }
@@ -690,7 +721,7 @@ function PlannedEventCard({ event }: { event: IntervalEvent }) {
 
 // ── SessionModal ──────────────────────────────────────────────────────────────
 
-type SessionTab = 'overview' | 'power' | 'heartrate' | 'laps'
+type SessionTab = 'overview' | 'power' | 'pace' | 'stroke' | 'heartrate' | 'laps'
 
 interface SessionModalProps {
   session:            SessionNoteRow
@@ -721,7 +752,9 @@ function SessionModal({
 
   const tabs: { id: SessionTab; label: string }[] = [
     { id: 'overview',  label: 'Overview' },
-    ...(isCycling ? [{ id: 'power' as SessionTab, label: 'Power' }] : []),
+    ...(isCycling  ? [{ id: 'power'  as SessionTab, label: 'Power' }] : []),
+    ...(isRunning  ? [{ id: 'pace'   as SessionTab, label: 'Pace & Cadence' }] : []),
+    ...(isSwimming ? [{ id: 'stroke' as SessionTab, label: 'Pace & Stroke' }] : []),
     ...(isCycling || isRunning ? [{ id: 'heartrate' as SessionTab, label: 'Heart Rate' }] : []),
     ...(isCycling || isRunning || isSwimming ? [{ id: 'laps' as SessionTab, label: 'Laps & Splits' }] : []),
   ]
@@ -824,9 +857,11 @@ function SessionModal({
                 onCoachOpen={onCoachOpen}
               />
             )}
-            {activeTab === 'power' && <PowerTab session={session} />}
+            {activeTab === 'power'     && <PowerTab session={session} />}
+            {activeTab === 'pace'      && <RunningPaceTab session={session} />}
+            {activeTab === 'stroke'    && <SwimmingStrokeTab session={session} />}
             {activeTab === 'heartrate' && <HeartrateTab session={session} />}
-            {activeTab === 'laps' && <LapsTab session={session} />}
+            {activeTab === 'laps'      && <LapsTab session={session} />}
           </div>
         </div>
 
@@ -859,40 +894,51 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
   onReflectionChange: (v: string) => void; onReflectionSave: () => void
   onCoachOpen: () => void
 }) {
-  const isCycling = session.sport === 'cycling'
-  const isRunning = session.sport === 'running'
+  const isCycling  = session.sport === 'cycling'
+  const isRunning  = session.sport === 'running'
+  const isSwimming = session.sport === 'swimming'
   const sportColor = getSportColor(session.sport)
 
   type Stat = { label: string; value: string; unit?: string }
 
-  const row1: Stat[] = [
+  const avgPace100m = (session.actual_duration_seconds && session.distance_meters)
+    ? session.actual_duration_seconds / (session.distance_meters / 100)
+    : null
+
+  const displayStats: Stat[] = isSwimming ? [
+    { label: 'Time',         value: formatDuration(session.actual_duration_seconds) },
+    { label: 'Distance',     value: formatDistance(session.distance_meters) },
+    { label: 'Calories',     value: session.calories != null ? String(session.calories) : '—', unit: session.calories != null ? 'kcal' : undefined },
+    { label: 'Avg /100m',    value: formatPace100m(avgPace100m) },
+    { label: 'Total Strokes', value: session.total_strokes != null ? String(session.total_strokes) : '—' },
+    { label: 'Pool Length',  value: session.pool_length != null ? `${session.pool_length}m` : '—' },
+  ] : [
     { label: 'Time',      value: formatDuration(session.actual_duration_seconds) },
     { label: 'Distance',  value: formatDistance(session.distance_meters) },
     { label: 'Elevation', value: session.elevation_gain_meters != null ? `${Math.round(session.elevation_gain_meters)}` : '—', unit: 'm' },
     { label: 'Calories',  value: session.calories != null ? String(session.calories) : '—', unit: session.calories != null ? 'kcal' : undefined },
-  ]
-
-  const row2: Stat[] = isCycling ? [
-    { label: 'Avg Power', value: session.avg_power_watts != null ? String(Math.round(session.avg_power_watts)) : '—', unit: session.avg_power_watts != null ? 'W' : undefined },
-    { label: 'NP',        value: session.normalized_power_watts != null ? String(Math.round(session.normalized_power_watts)) : '—', unit: session.normalized_power_watts != null ? 'W' : undefined },
-    { label: 'TSS',       value: session.actual_tss != null ? String(Math.round(session.actual_tss)) : '—' },
-    { label: 'IF',        value: session.intensity_factor != null ? session.intensity_factor.toFixed(2) : '—' },
-  ] : isRunning ? [
-    { label: 'Avg Pace',  value: formatPace(session.pace_per_km) },
-    { label: 'Avg HR',    value: session.avg_hr != null ? `${Math.round(session.avg_hr)}` : '—', unit: session.avg_hr != null ? 'bpm' : undefined },
-    { label: 'TSS',       value: session.actual_tss != null ? String(Math.round(session.actual_tss)) : '—' },
-    { label: 'Aerobic Dec', value: session.aerobic_decoupling != null ? `${session.aerobic_decoupling.toFixed(1)}%` : '—' },
-  ] : [
-    { label: 'Avg HR',    value: session.avg_hr != null ? `${Math.round(session.avg_hr)}` : '—', unit: session.avg_hr != null ? 'bpm' : undefined },
-    { label: 'TSS',       value: session.actual_tss != null ? String(Math.round(session.actual_tss)) : '—' },
+    ...(isCycling ? [
+      { label: 'Avg Power', value: session.avg_power_watts != null ? String(Math.round(session.avg_power_watts)) : '—', unit: session.avg_power_watts != null ? 'W' : undefined },
+      { label: 'NP',        value: session.normalized_power_watts != null ? String(Math.round(session.normalized_power_watts)) : '—', unit: session.normalized_power_watts != null ? 'W' : undefined },
+      { label: 'TSS',       value: session.actual_tss != null ? String(Math.round(session.actual_tss)) : '—' },
+      { label: 'IF',        value: session.intensity_factor != null ? session.intensity_factor.toFixed(2) : '—' },
+    ] : isRunning ? [
+      { label: 'Avg Pace',    value: formatPace(session.pace_per_km) },
+      { label: 'Avg HR',      value: session.avg_hr != null ? `${Math.round(session.avg_hr)}` : '—', unit: session.avg_hr != null ? 'bpm' : undefined },
+      { label: 'TSS',         value: session.actual_tss != null ? String(Math.round(session.actual_tss)) : '—' },
+      { label: 'Aerobic Dec', value: session.aerobic_decoupling != null ? `${session.aerobic_decoupling.toFixed(1)}%` : '—' },
+    ] : [
+      { label: 'Avg HR', value: session.avg_hr != null ? `${Math.round(session.avg_hr)}` : '—', unit: session.avg_hr != null ? 'bpm' : undefined },
+      { label: 'TSS',    value: session.actual_tss != null ? String(Math.round(session.actual_tss)) : '—' },
+    ]),
   ]
 
   type Pill = [string, string]
   const pills: Pill[] = [
-    ...(session.variability_index != null ? [['VI', session.variability_index.toFixed(2)] as Pill] : []),
-    ...(session.efficiency_factor != null ? [['EF', session.efficiency_factor.toFixed(2)] as Pill] : []),
-    ...(session.avg_cadence != null       ? [['Cadence', `${session.avg_cadence} rpm`] as Pill] : []),
-    ...(session.avg_temperature != null   ? [['Temp', `${Math.round(session.avg_temperature)}°C`] as Pill] : []),
+    ...(session.variability_index != null && isCycling ? [['VI', session.variability_index.toFixed(2)] as Pill] : []),
+    ...(session.efficiency_factor != null && isCycling ? [['EF', session.efficiency_factor.toFixed(2)] as Pill] : []),
+    ...(session.avg_cadence != null && !isSwimming     ? [['Cadence', `${session.avg_cadence} ${isRunning ? 'spm' : 'rpm'}`] as Pill] : []),
+    ...(session.avg_temperature != null               ? [['Temp', `${Math.round(session.avg_temperature)}°C`] as Pill] : []),
   ]
 
   return (
@@ -904,7 +950,7 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
           Actuals
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px 12px' }}>
-          {[...row1, ...row2].map(s => (
+          {displayStats.map(s => (
             <div key={s.label}>
               <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
@@ -921,13 +967,18 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
         <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
           Zone distribution
         </div>
-        <ZoneBar zones={session.zones} fallbackColor={sportColor} height={10} />
-        <ZoneLabels zones={session.zones} />
-        {!parseZoneSegments(session.zones) && (
-          <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
-            Zone data unavailable — sync to populate
-          </div>
-        )}
+        {(() => {
+          const z = isCycling ? getPowerZones(session.zones) : getHrZones(session.zones)
+          return <>
+            <ZoneBar zones={z} fallbackColor={sportColor} height={10} />
+            <ZoneLabels zones={z} />
+            {!parseZoneSegments(z) && (
+              <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
+                Zone data unavailable — sync to populate
+              </div>
+            )}
+          </>
+        })()}
       </div>
 
       {/* Stat pills */}
@@ -1040,9 +1091,9 @@ function PowerTab({ session }: { session: SessionNoteRow }) {
         <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 8 }}>
           Zone distribution
         </div>
-        <ZoneBar zones={session.zones} fallbackColor={getSportColor(session.sport)} height={10} />
-        <ZoneLabels zones={session.zones} />
-        {!parseZoneSegments(session.zones) && (
+        <ZoneBar zones={getPowerZones(session.zones)} fallbackColor={getSportColor(session.sport)} height={10} />
+        <ZoneLabels zones={getPowerZones(session.zones)} />
+        {!parseZoneSegments(getPowerZones(session.zones)) && (
           <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
             Zone data unavailable
           </div>
@@ -1111,9 +1162,9 @@ function HeartrateTab({ session }: { session: SessionNoteRow }) {
         <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 8 }}>
           HR zone distribution
         </div>
-        <ZoneBar zones={session.zones} fallbackColor={getSportColor(session.sport)} height={10} />
-        <ZoneLabels zones={session.zones} />
-        {!parseZoneSegments(session.zones) && (
+        <ZoneBar zones={getHrZones(session.zones)} fallbackColor={getSportColor(session.sport)} height={10} />
+        <ZoneLabels zones={getHrZones(session.zones)} />
+        {!parseZoneSegments(getHrZones(session.zones)) && (
           <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
             Zone data unavailable
           </div>
@@ -1128,6 +1179,117 @@ function HeartrateTab({ session }: { session: SessionNoteRow }) {
             <div style={{ fontSize: 12, color: '#E89B3C', lineHeight: 1.55 }}>
               Cardiac drift above 5% suggests accumulated fatigue or heat stress.
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── RunningPaceTab ────────────────────────────────────────────────────────────
+
+function RunningPaceTab({ session }: { session: SessionNoteRow }) {
+  type Stat = { label: string; value: string }
+  const paceStats: Stat[] = [
+    { label: 'Avg Pace',  value: formatPace(session.pace_per_km) },
+    { label: 'Best 1km',  value: formatPace(session.best_1km_pace) },
+    { label: 'Best 5km',  value: formatPace(session.best_5km_pace) },
+    { label: 'Best 10km', value: formatPace(session.best_10km_pace) },
+  ]
+
+  return (
+    <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div>
+        <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 12 }}>Pace metrics</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px 12px' }}>
+          {paceStats.map(s => (
+            <div key={s.label}>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
+              <div style={{ marginTop: 4 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 500, color: 'var(--fg-1)', lineHeight: 1 }}>{s.value}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {session.avg_cadence != null && (
+        <div>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 8 }}>Cadence</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 500, color: 'var(--fg-1)' }}>{Math.round(session.avg_cadence)}</span>
+            <span style={{ fontSize: 12, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>spm</span>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 8 }}>HR zone distribution</div>
+        <ZoneBar zones={getHrZones(session.zones)} fallbackColor={getSportColor(session.sport)} height={10} />
+        <ZoneLabels zones={getHrZones(session.zones)} />
+        {!parseZoneSegments(getHrZones(session.zones)) && (
+          <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>Zone data unavailable — sync to populate</div>
+        )}
+      </div>
+
+      <div style={{ fontSize: 12, color: 'var(--fg-4)', fontStyle: 'italic' }}>Detailed pace chart coming soon</div>
+    </div>
+  )
+}
+
+// ── SwimmingStrokeTab ─────────────────────────────────────────────────────────
+
+function SwimmingStrokeTab({ session }: { session: SessionNoteRow }) {
+  const bestEfforts = [
+    ...(session.best_100m_pace != null ? [{ label: 'Best 100m', value: formatPace100m(session.best_100m_pace) }] : []),
+    ...(session.best_400m_pace != null ? [{ label: 'Best 400m', value: formatPace100m(session.best_400m_pace) }] : []),
+  ]
+
+  const strokeStats = [
+    ...(session.avg_stroke_rate      != null ? [{ label: 'Avg Stroke Rate',    value: `${session.avg_stroke_rate.toFixed(1)}`, unit: 'str/min' }] : []),
+    ...(session.avg_strokes_per_length != null ? [{ label: 'Strokes / Length',  value: `${session.avg_strokes_per_length.toFixed(1)}`, unit: undefined }] : []),
+  ]
+
+  const hasContent = bestEfforts.length > 0 || strokeStats.length > 0
+
+  if (!hasContent) {
+    return (
+      <div style={{ padding: '40px 24px', textAlign: 'center' }}>
+        <Icon name="waves" size={24} color="var(--fg-4)" />
+        <div style={{ fontSize: 13, color: 'var(--fg-3)', marginTop: 12 }}>Stroke data not available for this session.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {bestEfforts.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 12 }}>Best efforts</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {bestEfforts.map(e => (
+              <div key={e.label} style={{ padding: '8px 14px', background: 'var(--bg-3)', border: '1px solid var(--border-default)', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{e.label}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--fg-1)' }}>{e.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {strokeStats.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 12 }}>Stroke metrics</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px 12px' }}>
+            {strokeStats.map(s => (
+              <div key={s.label}>
+                <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 500, color: 'var(--fg-1)', lineHeight: 1 }}>{s.value}</span>
+                  {s.unit && <span style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>{s.unit}</span>}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

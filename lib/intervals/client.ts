@@ -65,7 +65,7 @@ export function createIntervalsClient(apiKey: string, athleteId: string) {
 
     getActivityDetail(activityId: string): Promise<IntervalActivityDetail> {
       return get<IntervalActivityDetail>(
-        `/api/v1/athlete/${athleteId}/activities/${activityId}`
+        `/api/v1/activity/${activityId}?intervals=true`
       )
     },
 

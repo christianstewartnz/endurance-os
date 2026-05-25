@@ -48,11 +48,39 @@ export interface IntervalActivity {
   calories: number
   average_temp: number
   total_work: number // joules
+  // Swimming
+  pool_length?: number
+  total_strokes?: number
+  average_stroke_rate?: number
 }
 
 export interface IntervalActivityDetail {
   id: string
+  // Zone distribution (time in each zone)
+  icu_zone_times?: { id: string; secs: number }[]   // power zones
+  icu_hr_zone_times?: number[]                       // HR zones as flat array
+  // Interval/lap groups
   icu_groups?: unknown[]
+  icu_intervals?: unknown[]
+  // Power
+  icu_average_watts?: number
+  icu_weighted_avg_watts?: number
+  max_watts?: number
+  total_work?: number
+  icu_20min_watts?: number
+  icu_60min_watts?: number
+  icu_5min_watts?: number
+  icu_1min_watts?: number
+  icu_5sec_watts?: number
+  // Running best paces (seconds/km)
+  icu_1km_pace?: number
+  icu_5km_pace?: number
+  icu_10km_pace?: number
+  icu_half_marathon_pace?: number
+  // Swimming best paces (seconds/100m)
+  icu_100m_pace?: number
+  icu_400m_pace?: number
+  avg_strokes_per_length?: number
   [key: string]: unknown
 }
 
@@ -133,6 +161,22 @@ export interface SessionNoteRow {
   max_speed_kph: number | null
   avg_cadence: number | null
   pace_per_km: number | null
+  // Power best efforts
+  best_5min_power?: number | null
+  best_1min_power?: number | null
+  best_5sec_power?: number | null
+  // Running best paces (seconds/km)
+  best_1km_pace?: number | null
+  best_5km_pace?: number | null
+  best_10km_pace?: number | null
+  best_half_marathon_pace?: number | null
+  // Swimming
+  best_100m_pace?: number | null
+  best_400m_pace?: number | null
+  pool_length?: number | null
+  total_strokes?: number | null
+  avg_stroke_rate?: number | null
+  avg_strokes_per_length?: number | null
   // Other
   calories: number | null
   avg_temperature: number | null

@@ -190,6 +190,10 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
         setErrorMsg(data.error ?? 'Sync failed')
         return
       }
+      if (!data.success) {
+        setErrorMsg(`Sync failed: ${data.errors?.join(', ') ?? 'unknown error'}`)
+        return
+      }
       setState((s) => ({ ...s, lastSyncedAt: data.synced_at }))
     } catch {
       setErrorMsg('Network error — please try again')
@@ -246,6 +250,7 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
           </div>
         </div>
         {state.isConnected && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button kind="secondary" size="sm" icon="refresh-cw" onClick={handleSync}>
               {syncing ? 'Syncing…' : 'Sync now'}
@@ -253,6 +258,12 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
             <Button kind="ghost" size="sm" onClick={() => setShowForm((v) => !v)}>
               {showForm ? 'Cancel' : 'Edit'}
             </Button>
+          </div>
+          {syncing && (
+            <div style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
+              Fetching activity details — may take 30–60s
+            </div>
+          )}
           </div>
         )}
       </div>
