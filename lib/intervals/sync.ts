@@ -148,9 +148,19 @@ export async function syncActivities(userId: string): Promise<void> {
   const client = createIntervalsClient(creds.apiKey, creds.athleteId)
   const supabase = createAdminClient()
 
+  const now = new Date()
+  const tomorrow = new Date(now)
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  const monthAgo = new Date(now)
+  monthAgo.setDate(monthAgo.getDate() - 30)
+  const newest = tomorrow.toISOString().split('T')[0]
+  const oldest = monthAgo.toISOString().split('T')[0]
+
+  console.log('[intervals] Fetching activities from', oldest, 'to', newest)
+
   let activities: IntervalActivity[]
   try {
-    activities = await client.getActivities(daysAgo(28), today())
+    activities = await client.getActivities(oldest, newest)
   } catch (err) {
     if (err instanceof IntervalsApiError) {
       if (err.status === 401) await markConnectionInvalid(userId)
@@ -161,6 +171,9 @@ export async function syncActivities(userId: string): Promise<void> {
     }
     return
   }
+
+  console.log('[intervals] Activities returned from API:', activities.length)
+  console.log('[intervals] Activity dates:', activities.map(a => a.start_date_local.split('T')[0]))
 
   const activityIds = activities.map((a) => String(a.id))
   console.log(`[intervals] Fetching details for ${activityIds.length} activities...`)

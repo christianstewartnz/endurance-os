@@ -1,12 +1,13 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Icon, Kbd } from '@/components/atoms'
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: 'layout-dashboard', kbd: '⌘1' },
   { path: '/calendar',  label: 'Calendar',  icon: 'calendar',         kbd: '⌘2' },
-  { path: '/context',   label: 'Context',   icon: 'brain',            kbd: '⌘3', dot: true },
+  { path: '/context',   label: 'Context',   icon: 'brain',            kbd: '⌘3' },
   { path: '/races',     label: 'Races',     icon: 'flag',             kbd: '⌘4' },
   { path: '/settings',  label: 'Settings',  icon: 'settings-2',       kbd: '⌘,' },
 ] as const
@@ -18,6 +19,14 @@ interface SidebarProps {
 export default function Sidebar({ onSearch }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
+  const [contextDot, setContextDot] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/context/suggestions/pending')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setContextDot(d.suggestions.length > 0) })
+      .catch(() => {})
+  }, [pathname])
 
   return (
     <aside style={{
@@ -104,7 +113,7 @@ export default function Sidebar({ onSearch }: SidebarProps) {
                 color={active ? 'var(--fg-1)' : 'var(--fg-3)'}
               />
               <span style={{ flex: 1 }}>{item.label}</span>
-              {'dot' in item && item.dot && !active && (
+              {item.path === '/context' && contextDot && !active && (
                 <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--accent)' }} />
               )}
               {active && (

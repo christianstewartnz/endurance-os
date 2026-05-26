@@ -303,7 +303,7 @@ export function Sparkline({ data, width = 120, height = 28, color = 'var(--accen
     ? height - ((baseline - min) / range) * (height - 4) - 2
     : null
   return (
-    <svg width={width} height={height} style={{ display: 'block' }}>
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ display: 'block' }}>
       {fill && <path d={area} fill={color} opacity="0.16" />}
       <path d={d} stroke={color} strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
       {baseY !== null && (
