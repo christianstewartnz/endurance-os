@@ -23,15 +23,13 @@ interface SettingsViewProps {
 }
 
 export default function SettingsView({ intervalsConnection, anthropicKeyState, userEmail }: SettingsViewProps) {
-  const [section, setSection] = useState('ai')
+  const [section, setSection] = useState('connections')
   const sections = [
-    { id: 'account',     label: 'Account',          icon: 'user' },
-    { id: 'connections', label: 'Connections',       icon: 'plug' },
-    { id: 'ai',          label: 'AI model',          icon: 'cpu' },
-    { id: 'coach',       label: 'Coach style',       icon: 'message-square' },
-    { id: 'rules',       label: 'Adaptation rules',  icon: 'sliders-horizontal' },
-    { id: 'keys',        label: 'API keys',          icon: 'key' },
-    { id: 'appearance',  label: 'Appearance',        icon: 'palette' },
+    { id: 'account',     label: 'Account',    icon: 'user' },
+    { id: 'connections', label: 'Connections', icon: 'plug' },
+    { id: 'ai',          label: 'AI model',   icon: 'cpu' },
+    { id: 'keys',        label: 'API keys',   icon: 'key' },
+    { id: 'appearance',  label: 'Appearance', icon: 'palette' },
   ]
 
   return (
@@ -63,20 +61,18 @@ export default function SettingsView({ intervalsConnection, anthropicKeyState, u
         </div>
 
         <div>
-          {section === 'ai'          && <AIModelPanel />}
-          {section === 'keys'        && <APIKeysPanel initial={anthropicKeyState} />}
-          {section === 'coach'       && <CoachStylePanel />}
-          {section === 'rules'       && <RulesPanel />}
           {section === 'account'     && <AccountPanel email={userEmail ?? null} />}
           {section === 'connections' && <ConnectionsPanel intervals={intervalsConnection} />}
-          {section === 'appearance'  && <SimplePanel title="Appearance" items={[['Theme','Graphite (dark)'],['Density','Comfortable'],['Accent','Electric lime'],['Font','Geist · default']]} />}
+          {section === 'ai'          && <AIModelComingSoonPanel />}
+          {section === 'keys'        && <APIKeysPanel initial={anthropicKeyState} />}
+          {section === 'appearance'  && <AppearancePanel />}
         </div>
       </div>
     </div>
   )
 }
 
-// ── Account panel ────────────────────────────────────────────────────────────
+// ── Account panel ─────────────────────────────────────────────────────────────
 
 function AccountPanel({ email }: { email: string | null }) {
   const [pending, startTransition] = useTransition()
@@ -89,7 +85,7 @@ function AccountPanel({ email }: { email: string | null }) {
       </div>
 
       <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>Email</div>
+        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Email</div>
         <div style={{ fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)' }}>{email ?? '—'}</div>
       </div>
 
@@ -111,31 +107,43 @@ function AccountPanel({ email }: { email: string | null }) {
   )
 }
 
-// ── Connections panel ────────────────────────────────────────────────────────
+// ── Connections panel ─────────────────────────────────────────────────────────
 
 function ConnectionsPanel({ intervals }: { intervals?: IntervalsConnectionState }) {
+  const comingSoon = [
+    { label: 'TrainingPeaks', icon: 'activity' },
+    { label: 'Strava',        icon: 'zap' },
+    { label: 'Garmin Direct', icon: 'watch' },
+  ]
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <IntervalsConnectionPanel initial={intervals} />
-      <SimpleConnectionRow label="Garmin Connect" status="Connected · 2m ago" />
-      <SimpleConnectionRow label="TrainingPeaks" status="Not connected" />
-      <SimpleConnectionRow label="Strava" status="Connected · 14m ago" />
-      <SimpleConnectionRow label="Apple Health" status="Connected" />
-    </div>
-  )
-}
 
-function SimpleConnectionRow({ label, status }: { label: string; status: string }) {
-  const connected = !status.startsWith('Not')
-  return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{label}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 12, color: connected ? 'var(--success)' : 'var(--fg-3)' }}>
-          {connected && <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--success)', marginRight: 6, verticalAlign: 'middle' }} />}
-          {status}
-        </span>
-        <Button kind="ghost" size="sm">{connected ? 'Disconnect' : 'Connect'}</Button>
+      {/* Coming soon section */}
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>Coming soon</div>
+        </div>
+        {comingSoon.map((c, i) => (
+          <div
+            key={c.label}
+            style={{
+              padding: '14px 20px',
+              borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              opacity: 0.5,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Icon name={c.icon} size={14} color="var(--fg-3)" />
+              <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{c.label}</span>
+            </div>
+            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-4)', background: 'var(--bg-3)', border: '1px solid var(--border-subtle)', padding: '2px 7px', borderRadius: 3 }}>
+              Coming soon
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -224,7 +232,6 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
 
   return (
     <div style={{ background: 'var(--bg-2)', border: `1px solid ${state.isInvalid ? 'var(--danger)' : 'var(--border-default)'}`, borderRadius: 10, overflow: 'hidden' }}>
-      {/* Header */}
       <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -251,24 +258,23 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
         </div>
         {state.isConnected && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button kind="secondary" size="sm" icon="refresh-cw" onClick={handleSync}>
-              {syncing ? 'Syncing…' : 'Sync now'}
-            </Button>
-            <Button kind="ghost" size="sm" onClick={() => setShowForm((v) => !v)}>
-              {showForm ? 'Cancel' : 'Edit'}
-            </Button>
-          </div>
-          {syncing && (
-            <div style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
-              Fetching activity details — may take 30–60s
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button kind="secondary" size="sm" icon="refresh-cw" onClick={handleSync}>
+                {syncing ? 'Syncing…' : 'Sync now'}
+              </Button>
+              <Button kind="ghost" size="sm" onClick={() => setShowForm((v) => !v)}>
+                {showForm ? 'Cancel' : 'Edit'}
+              </Button>
             </div>
-          )}
+            {syncing && (
+              <div style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>
+                Fetching activity details — may take 30–60s
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Connected status row */}
       {state.isConnected && !showForm && (
         <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
@@ -283,7 +289,6 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
         </div>
       )}
 
-      {/* Form */}
       {showForm && (
         <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
@@ -295,12 +300,7 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={state.isConnected ? '••••••••••••••••' : 'Paste your Intervals.icu API key'}
-              style={{
-                width: '100%', boxSizing: 'border-box',
-                background: 'var(--bg-1)', border: '1px solid var(--border-default)',
-                borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)',
-                fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
-              }}
+              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none' }}
             />
           </div>
           <div>
@@ -312,16 +312,9 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
               value={athleteIdInput}
               onChange={(e) => setAthleteIdInput(e.target.value)}
               placeholder="e.g. i12345"
-              style={{
-                width: '100%', boxSizing: 'border-box',
-                background: 'var(--bg-1)', border: '1px solid var(--border-default)',
-                borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)',
-                fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
-              }}
+              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none' }}
             />
-            <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 5 }}>
-              Found in Settings → About on intervals.icu
-            </div>
+            <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 5 }}>Found in Settings → About on intervals.icu</div>
           </div>
           {errorMsg && (
             <div style={{ fontSize: 12, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -343,43 +336,65 @@ function IntervalsConnectionPanel({ initial }: { initial?: IntervalsConnectionSt
   )
 }
 
-// ── Existing panels (unchanged) ──────────────────────────────────────────────
+// ── AI model — coming soon ────────────────────────────────────────────────────
 
-function AIModelPanel() {
-  const models = [
-    { id: 'sonnet', vendor: 'Anthropic', name: 'Claude Sonnet 4.5', desc: 'Default. Deep training reasoning, long context.',                    tag: 'Recommended', active: true },
-    { id: 'opus',   vendor: 'Anthropic', name: 'Claude Opus 4.5',   desc: 'Highest-fidelity reasoning. Slow. Use for hard adaptations.',        tag: 'Premium',     active: false },
-    { id: 'gpt',    vendor: 'OpenAI',    name: 'GPT-5',             desc: 'Fast, broad. Bring your own key.',                                   tag: 'BYOK',        active: false },
-    { id: 'local',  vendor: 'Local',     name: 'Ollama · llama-3.3',desc: 'On-device. Works offline. Lower training-context depth.',            tag: 'Local',       active: false },
-    { id: 'custom', vendor: 'Custom',    name: 'Custom endpoint',   desc: 'OpenAI-compatible URL + auth. For self-hosted models.',              tag: 'Custom',      active: false },
+function AIModelComingSoonPanel() {
+  const previewModels = [
+    { label: 'Claude Sonnet', sub: 'Recommended' },
+    { label: 'Claude Opus',   sub: 'Premium' },
+    { label: 'GPT-4o',        sub: 'Coming soon' },
   ]
+
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>AI model</h2>
-        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>The Coach is model-agnostic. Use ours, bring your own, or self-host.</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>AI model</h2>
+          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)', background: 'var(--bg-3)', border: '1px solid var(--border-subtle)', padding: '2px 7px', borderRadius: 3 }}>Coming soon</span>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Hosted model subscription — coming soon.</div>
       </div>
-      <div>
-        {models.map((m, i) => (
-          <div key={m.id} style={{ padding: '14px 20px', borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none', display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 14, alignItems: 'center' }}>
-            <div style={{ width: 16, height: 16, borderRadius: 999, border: `1.5px solid ${m.active ? 'var(--accent)' : 'var(--border-strong)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {m.active && <div style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--accent)' }} />}
+
+      <div style={{ padding: '20px', opacity: 0.45, pointerEvents: 'none', userSelect: 'none' }}>
+        <div style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.6, marginBottom: 20, maxWidth: 440 }}>
+          Choose a hosted AI model powered by Endurance OS — no key required. Available in a future subscription plan.
+        </div>
+        {previewModels.map((m, i) => (
+          <div
+            key={m.label}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 14,
+              padding: '12px 0',
+              borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none',
+            }}
+          >
+            <div style={{ width: 16, height: 16, borderRadius: 999, border: `1.5px solid ${i === 0 ? 'var(--accent)' : 'var(--border-strong)'}`, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {i === 0 && <div style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--accent)' }} />}
             </div>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{m.name}</span>
-                <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>· {m.vendor}</span>
-                <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: m.active ? 'var(--accent)' : 'var(--fg-3)', background: m.active ? 'var(--accent-soft)' : 'var(--bg-3)', padding: '1px 6px', borderRadius: 3 }}>{m.tag}</span>
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 2 }}>{m.desc}</div>
+              <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{m.label}</span>
+              <span style={{ fontSize: 11, color: 'var(--fg-4)', marginLeft: 8, fontFamily: 'var(--font-mono)' }}>— {m.sub}</span>
             </div>
-            <Button kind="ghost" size="sm">{m.active ? 'Configure' : 'Use'}</Button>
           </div>
         ))}
+      </div>
+
+      <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-1)' }}>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+          Connect your own API key in{' '}
+          <span
+            style={{ color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+          >
+            Settings → API keys
+          </span>
+          {' '}to power the Coach today.
+        </div>
       </div>
     </div>
   )
 }
+
+// ── API keys panel ────────────────────────────────────────────────────────────
 
 function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
   const [keyState, setKeyState] = useState<AnthropicKeyState>(
@@ -443,7 +458,6 @@ function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
         <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Bring your own API key to power the AI Coach.</div>
       </div>
 
-      {/* Anthropic section */}
       <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <div style={{ width: 20, height: 20, borderRadius: 5, background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -474,11 +488,7 @@ function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleConnect() }}
               placeholder="sk-ant-…"
-              style={{
-                background: 'var(--bg-1)', border: '1px solid var(--border-default)',
-                borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)',
-                fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
-              }}
+              style={{ background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '8px 10px', color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none' }}
             />
             {error && (
               <div style={{ fontSize: 12, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -495,114 +505,106 @@ function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
         )}
       </div>
 
-      {/* Remaining placeholder rows */}
-      {[{ provider: 'OpenAI', note: 'Optional — for future model switching' }].map((k) => (
-        <div key={k.provider} style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>{k.provider}</div>
-            <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>{k.note}</div>
-          </div>
-          <Button kind="ghost" size="sm">Connect</Button>
+      <div style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)' }}>OpenAI</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Optional — for future model switching</div>
         </div>
-      ))}
+        <Button kind="ghost" size="sm">Connect</Button>
+      </div>
     </div>
   )
 }
 
-function CoachStylePanel() {
-  const rows: [string, string[], number][] = [
-    ['Tone',         ['Direct', 'Friendly', 'Mentor', 'Pro coach'], 0],
-    ['Length',       ['Short', 'Standard', 'Verbose'],              0],
-    ['Praise',       ['None', 'Minimal', 'Encouraging'],            1],
-    ['Challenge me', ['Never', 'When data conflicts', 'Always'],    1],
-  ]
+// ── Appearance panel ──────────────────────────────────────────────────────────
+
+type Density = 'comfortable' | 'compact'
+
+function AppearancePanel() {
+  const [density, setDensity] = useState<Density>('comfortable')
+  const [showSync, setShowSync] = useState(true)
+
+  useEffect(() => {
+    const d = localStorage.getItem('eos_density')
+    if (d === 'comfortable' || d === 'compact') setDensity(d)
+    setShowSync(localStorage.getItem('eos_show_sync_indicator') !== 'false')
+  }, [])
+
+  function handleDensity(v: Density) {
+    setDensity(v)
+    localStorage.setItem('eos_density', v)
+  }
+
+  function handleShowSync(v: boolean) {
+    setShowSync(v)
+    localStorage.setItem('eos_show_sync_indicator', String(v))
+  }
+
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
       <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Coach style</h2>
-        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>How the Coach talks to you. Edited fields apply to every future conversation.</div>
+        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Appearance</h2>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Display preferences saved locally to this browser.</div>
       </div>
-      <div style={{ padding: '16px 20px' }}>
-        {rows.map(([k, opts, defaultIdx], i) => (
-          <div key={k} style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 16, padding: '12px 0', borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none', alignItems: 'center' }}>
-            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>{k}</div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {opts.map((o, oi) => (
-                <button key={o} style={{ padding: '4px 10px', fontSize: 12, fontFamily: 'inherit', background: oi === defaultIdx ? 'var(--bg-4)' : 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 4, color: oi === defaultIdx ? 'var(--fg-1)' : 'var(--fg-3)', cursor: 'pointer' }}>{o}</button>
-              ))}
-            </div>
+
+      {/* Theme */}
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 3 }}>Theme</div>
+          <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>Graphite · Dark</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>More themes coming soon</span>
+          <div style={{ opacity: 0.4, pointerEvents: 'none' }}>
+            <ToggleDot on={true} />
           </div>
-        ))}
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 14, marginTop: 4 }}>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 8 }}>System prompt (advanced)</div>
-          <textarea
-            defaultValue={`You are a head endurance coach. Talk like a former pro: precise, grounded, brief. Never use motivational language. State the recommendation, then briefly why. When data conflicts with the athlete's plan, surface it.`}
-            rows={4}
-            style={{ width: '100%', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, padding: 10, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.5, outline: 'none', resize: 'vertical', boxSizing: 'border-box' }}
-          />
+        </div>
+      </div>
+
+      {/* Density */}
+      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Density</div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {(['comfortable', 'compact'] as Density[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => handleDensity(v)}
+              style={{
+                padding: '4px 12px', fontSize: 12, fontFamily: 'inherit',
+                background: density === v ? 'var(--bg-4)' : 'var(--bg-1)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 4,
+                color: density === v ? 'var(--fg-1)' : 'var(--fg-3)',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+              }}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Sync indicator */}
+      <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 3 }}>Show sync indicator</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>Shows &ldquo;Synced from Intervals.icu · Xm ago&rdquo; on the dashboard</div>
+        </div>
+        <div onClick={() => handleShowSync(!showSync)} style={{ cursor: 'pointer' }}>
+          <ToggleDot on={showSync} />
         </div>
       </div>
     </div>
   )
 }
 
-function RulesPanel() {
-  const rules = [
-    { name: 'HRV-driven swap',  when: 'HRV < −7% for 2d',       then: 'Propose Z2 swap',                mode: 'Auto-propose', enabled: true  },
-    { name: 'Sleep guard',      when: 'Sleep < 6h',               then: 'Downshift today\'s intensity',   mode: 'Auto-propose', enabled: true  },
-    { name: 'Travel cap',       when: 'Flight > 2h',              then: 'Cap intensity 24h post-flight',  mode: 'Auto-apply',   enabled: true  },
-    { name: 'Race week',        when: 'T-7 days to A-race',       then: 'No Z4+ work · openers Thu',     mode: 'Auto-apply',   enabled: true  },
-    { name: 'Injury pause',     when: 'Pain reported',            then: 'Pause 48h · resume Z1',         mode: 'Manual',       enabled: true  },
-    { name: 'Sauna post-VO2',   when: 'VO2 logged today',         then: 'Skip sauna recommendation',     mode: 'Auto-propose', enabled: false },
-  ]
-  return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Adaptation rules</h2>
-          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Conditions the Coach uses to propose or apply changes to your plan.</div>
-        </div>
-        <Button kind="secondary" size="sm" icon="plus">New rule</Button>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 110px 60px', background: 'var(--bg-1)', padding: '8px 20px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', borderBottom: '1px solid var(--border-subtle)' }}>
-        <span>Rule</span><span>When</span><span>Then</span><span>Mode</span><span style={{ textAlign: 'right' }}>On</span>
-      </div>
-      {rules.map((r, i) => (
-        <div key={r.name} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 110px 60px', padding: '12px 20px', borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none', alignItems: 'center', fontSize: 12, opacity: r.enabled ? 1 : 0.5 }}>
-          <span style={{ color: 'var(--fg-1)', fontWeight: 500 }}>{r.name}</span>
-          <span style={{ color: 'var(--fg-2)', fontFamily: 'var(--font-mono)' }}>{r.when}</span>
-          <span style={{ color: 'var(--fg-2)' }}>{r.then}</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: r.mode === 'Auto-apply' ? 'var(--ai)' : 'var(--fg-3)' }}>{r.mode}</span>
-          <span style={{ textAlign: 'right' }}><ToggleDot on={r.enabled} /></span>
-        </div>
-      ))}
-    </div>
-  )
-}
+// ── Shared ────────────────────────────────────────────────────────────────────
 
 function ToggleDot({ on }: { on: boolean }) {
   return (
-    <div style={{ display: 'inline-block', width: 26, height: 14, borderRadius: 999, background: on ? 'var(--accent)' : 'var(--bg-3)', border: `1px solid ${on ? 'var(--accent)' : 'var(--border-default)'}`, position: 'relative', cursor: 'pointer' }}>
+    <div style={{ display: 'inline-block', width: 26, height: 14, borderRadius: 999, background: on ? 'var(--accent)' : 'var(--bg-3)', border: `1px solid ${on ? 'var(--accent)' : 'var(--border-default)'}`, position: 'relative' }}>
       <div style={{ position: 'absolute', top: 1, left: on ? 13 : 1, width: 10, height: 10, borderRadius: 999, background: on ? 'var(--accent-fg)' : 'var(--fg-3)', transition: 'left var(--dur-micro) var(--ease-out)' }} />
-    </div>
-  )
-}
-
-function SimplePanel({ title, items }: { title: string; items: [string, string][] }) {
-  return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>{title}</h2>
-      </div>
-      {items.map(([k, v], i) => (
-        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}>
-          <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>{k}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ fontSize: 13, color: 'var(--fg-2)' }}>{v}</div>
-            <Icon name="chevron-right" size={14} color="var(--fg-4)" />
-          </div>
-        </div>
-      ))}
     </div>
   )
 }
