@@ -71,9 +71,17 @@ function coerceFields(module: string, raw: Record<string, unknown>): Record<stri
       const n = parseFloat(String(v))
       out[k] = isNaN(n) ? null : n
     } else if (arrays.includes(k)) {
-      out[k] = String(v).split(',').map((s) => s.trim()).filter(Boolean)
+      if (Array.isArray(v)) {
+        out[k] = v
+      } else {
+        out[k] = String(v).split(',').map((s) => s.trim()).filter(Boolean)
+      }
     } else if (jsonbs.includes(k)) {
-      try { out[k] = JSON.parse(String(v)) } catch { out[k] = String(v) }
+      if (typeof v === 'object') {
+        out[k] = v
+      } else {
+        try { out[k] = JSON.parse(String(v)) } catch { out[k] = String(v) }
+      }
     } else {
       out[k] = v
     }

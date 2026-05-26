@@ -32,6 +32,42 @@ interface ContextViewProps {
   pendingSuggestions: ContextSuggestion[]
 }
 
+interface IllnessForm {
+  id: string
+  name: string
+  description: string
+  dateStart: string
+  restrictions: string
+  canCycle: boolean
+  canRun: boolean
+  canSwim: boolean
+  notes: string
+  date_cleared?: string | null
+  date_added?: string
+}
+
+interface InjuryForm {
+  id: string
+  bodyPart: string
+  description: string
+  dateStart: string
+  restrictions: string
+  canCycle: boolean
+  canRun: boolean
+  canSwim: boolean
+  physioNotes: string
+  date_cleared?: string | null
+  date_added?: string
+}
+
+interface HealthFormState {
+  illnessForms: IllnessForm[]
+  injuryForms: InjuryForm[]
+  monitoringFlags: string[]
+  allergies: string
+  medications: string
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(v: unknown): string {
@@ -45,7 +81,6 @@ function fmt(v: unknown): string {
   return String(v)
 }
 
-// Returns display rows for view mode — can include computed/combined fields.
 function moduleFields(module: string, data: Row | null): Array<[string, string]> {
   if (!data) return []
   switch (module) {
@@ -119,8 +154,6 @@ function moduleFields(module: string, data: Row | null): Array<[string, string]>
   }
 }
 
-// Returns edit field definitions keyed by actual DB column names.
-// Always returns fields regardless of whether data exists (enables create-on-first-edit).
 interface FieldDef { label: string; key: string; hint?: string }
 
 function editableFieldDefs(module: string): FieldDef[] {
@@ -176,14 +209,6 @@ function editableFieldDefs(module: string): FieldDef[] {
         { label: 'GI notes', key: 'gi_notes' },
         { label: 'Heat threshold (°C)', key: 'heat_threshold_celsius', hint: 'number' },
       ]
-    case 'health':
-      return [
-        { label: 'Active illnesses', key: 'illnesses', hint: 'JSON array — managed by coach suggestions' },
-        { label: 'Active injuries', key: 'active_injuries', hint: 'JSON array — managed by coach suggestions' },
-        { label: 'Monitoring flags', key: 'monitoring_flags' },
-        { label: 'Allergies', key: 'allergies' },
-        { label: 'Medications', key: 'medications' },
-      ]
     case 'recovery':
       return [
         { label: 'Sleep target (h)', key: 'sleep_target_hours', hint: 'number' },
@@ -229,6 +254,7 @@ export default function ContextView({
   const [activeId, setActiveId] = useState('plan-dna')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editFields, setEditFields] = useState<Record<string, string>>({})
+  const [healthForm, setHealthForm] = useState<HealthFormState | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<ContextSuggestion[]>(initialSuggestions)
@@ -242,7 +268,7 @@ export default function ContextView({
     await fetch('/api/context/health_injury', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ illnesses: JSON.stringify(updated) }),
+      body: JSON.stringify({ illnesses: updated }),
     })
     router.refresh()
   }
@@ -254,7 +280,7 @@ export default function ContextView({
     await fetch('/api/context/health_injury', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active_injuries: JSON.stringify(updated) }),
+      body: JSON.stringify({ active_injuries: updated }),
     })
     router.refresh()
   }
@@ -288,18 +314,70 @@ export default function ContextView({
     const apiModule = moduleMap[active.id]
     if (apiModule) {
       try {
+        let body: Record<string, unknown>
+
+        if (active.id === 'health' && healthForm) {
+          const d = active.data
+          const today = new Date().toISOString().split('T')[0]
+          const origIllnesses = Array.isArray(d?.illnesses) ? (d.illnesses as Record<string, unknown>[]) : []
+          const pastIllnesses = origIllnesses.filter((il) => !!il.date_cleared)
+          const origInjuries = Array.isArray(d?.active_injuries) ? (d.active_injuries as Record<string, unknown>[]) : []
+          const pastInjuries = origInjuries.filter((inj) => !!inj.date_cleared)
+
+          body = {
+            illnesses: [
+              ...healthForm.illnessForms.map((f) => ({
+                id: f.id,
+                name: f.name,
+                description: f.description,
+                date_start: f.dateStart,
+                restrictions: f.restrictions.split('\n').filter(Boolean),
+                can_cycle: f.canCycle,
+                can_run: f.canRun,
+                can_swim: f.canSwim,
+                physio_notes: f.notes,
+                date_cleared: null,
+                date_added: f.date_added ?? today,
+              })),
+              ...pastIllnesses,
+            ],
+            active_injuries: [
+              ...healthForm.injuryForms.map((f) => ({
+                id: f.id,
+                body_part: f.bodyPart,
+                description: f.description,
+                date_start: f.dateStart,
+                restrictions: f.restrictions.split('\n').filter(Boolean),
+                can_cycle: f.canCycle,
+                can_run: f.canRun,
+                can_swim: f.canSwim,
+                physio_notes: f.physioNotes,
+                date_cleared: null,
+                date_added: f.date_added ?? today,
+              })),
+              ...pastInjuries,
+            ],
+            monitoring_flags: healthForm.monitoringFlags,
+            allergies: healthForm.allergies,
+            medications: healthForm.medications,
+          }
+        } else {
+          body = editFields
+        }
+
         const res = await fetch(`/api/context/${apiModule}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(editFields),
+          body: JSON.stringify(body),
         })
         if (res.ok) {
           router.refresh()
           setEditingId(null)
           setEditFields({})
+          setHealthForm(null)
         } else {
-          const body = await res.json().catch(() => ({}))
-          setSaveError(body.error ?? `Save failed (HTTP ${res.status})`)
+          const b = await res.json().catch(() => ({}))
+          setSaveError(b.error ?? `Save failed (HTTP ${res.status})`)
         }
       } catch (e) {
         setSaveError(e instanceof Error ? e.message : 'Network error')
@@ -321,6 +399,52 @@ export default function ContextView({
   }
 
   function startEdit() {
+    if (active.id === 'health') {
+      const d = active.data
+      const today = new Date().toISOString().split('T')[0]
+      const illnesses = Array.isArray(d?.illnesses)
+        ? (d.illnesses as Record<string, unknown>[]).filter((il) => !il.date_cleared)
+        : []
+      const injuries = Array.isArray(d?.active_injuries)
+        ? (d.active_injuries as Record<string, unknown>[]).filter((inj) => !inj.date_cleared)
+        : []
+      const flags = Array.isArray(d?.monitoring_flags) ? (d.monitoring_flags as string[]) : []
+
+      setHealthForm({
+        illnessForms: illnesses.map((il) => ({
+          id: String(il.id ?? crypto.randomUUID()),
+          name: String(il.name ?? ''),
+          description: String(il.description ?? ''),
+          dateStart: String(il.date_start ?? ''),
+          restrictions: Array.isArray(il.restrictions) ? (il.restrictions as string[]).join('\n') : '',
+          canCycle: typeof il.can_cycle === 'boolean' ? il.can_cycle : true,
+          canRun: typeof il.can_run === 'boolean' ? il.can_run : false,
+          canSwim: typeof il.can_swim === 'boolean' ? il.can_swim : true,
+          notes: String(il.physio_notes ?? ''),
+          date_cleared: (il.date_cleared as string | null | undefined) ?? null,
+          date_added: il.date_added ? String(il.date_added) : today,
+        })),
+        injuryForms: injuries.map((inj) => ({
+          id: String(inj.id ?? crypto.randomUUID()),
+          bodyPart: String(inj.body_part ?? ''),
+          description: String(inj.description ?? ''),
+          dateStart: String(inj.date_start ?? ''),
+          restrictions: Array.isArray(inj.restrictions) ? (inj.restrictions as string[]).join('\n') : '',
+          canCycle: typeof inj.can_cycle === 'boolean' ? inj.can_cycle : true,
+          canRun: typeof inj.can_run === 'boolean' ? inj.can_run : false,
+          canSwim: typeof inj.can_swim === 'boolean' ? inj.can_swim : true,
+          physioNotes: String(inj.physio_notes ?? ''),
+          date_cleared: (inj.date_cleared as string | null | undefined) ?? null,
+          date_added: inj.date_added ? String(inj.date_added) : today,
+        })),
+        monitoringFlags: flags,
+        allergies: d?.allergies ? String(d.allergies) : '',
+        medications: d?.medications ? String(d.medications) : '',
+      })
+      setEditingId(active.id)
+      return
+    }
+
     const defs = editableFieldDefs(active.id)
     const init: Record<string, string> = {}
     for (const def of defs) init[def.key] = fieldValueFromData(active.data, def.key)
@@ -406,6 +530,7 @@ export default function ContextView({
           module={active}
           editing={editingId === active.id}
           editFields={editFields}
+          healthForm={healthForm}
           saving={saving}
           saveError={saveError}
           trainingPatterns={trainingPatterns}
@@ -413,8 +538,9 @@ export default function ContextView({
           raceGoals={raceGoals}
           onEdit={startEdit}
           onFieldChange={(k, v) => setEditFields((prev) => ({ ...prev, [k]: v }))}
+          onHealthFormChange={setHealthForm}
           onSave={handleSave}
-          onClose={() => { setEditingId(null); setEditFields({}); setSaveError(null) }}
+          onClose={() => { setEditingId(null); setEditFields({}); setHealthForm(null); setSaveError(null) }}
           onMarkIllnessRecovered={handleMarkIllnessRecovered}
           onMarkInjuryResolved={handleMarkInjuryResolved}
         />
@@ -429,6 +555,7 @@ interface ModuleDetailProps {
   module: { id: string; title: string; icon: string; tag: string; data: Row | null; editable: boolean }
   editing: boolean
   editFields: Record<string, string>
+  healthForm: HealthFormState | null
   saving: boolean
   saveError: string | null
   trainingPatterns: Row[]
@@ -436,13 +563,14 @@ interface ModuleDetailProps {
   raceGoals: Row[]
   onEdit: () => void
   onFieldChange: (k: string, v: string) => void
+  onHealthFormChange: (s: HealthFormState) => void
   onSave: () => void
   onClose: () => void
   onMarkIllnessRecovered?: (id: string) => Promise<void>
   onMarkInjuryResolved?: (id: string) => Promise<void>
 }
 
-function ModuleDetail({ module, editing, editFields, saving, saveError, trainingPatterns, adaptationRules, raceGoals, onEdit, onFieldChange, onSave, onClose, onMarkIllnessRecovered, onMarkInjuryResolved }: ModuleDetailProps) {
+function ModuleDetail({ module, editing, editFields, healthForm, saving, saveError, trainingPatterns, adaptationRules, raceGoals, onEdit, onFieldChange, onHealthFormChange, onSave, onClose, onMarkIllnessRecovered, onMarkInjuryResolved }: ModuleDetailProps) {
   const fields = moduleFields(module.id, module.data)
 
   function renderSpecialModule() {
@@ -481,6 +609,14 @@ function ModuleDetail({ module, editing, editFields, saving, saveError, training
             </div>
           ))}
         </div>
+      )
+    }
+    if (module.id === 'health' && editing && healthForm) {
+      return (
+        <HealthModuleEdit
+          healthForm={healthForm}
+          onFormChange={onHealthFormChange}
+        />
       )
     }
     if (module.id === 'health' && !editing) {
@@ -553,7 +689,6 @@ function ModuleDetail({ module, editing, editFields, saving, saveError, training
       {special ?? (
         <div style={{ padding: '8px 0' }}>
           {editing ? (
-            // Edit mode: render from editableFieldDefs — keyed by real DB column names
             editableFieldDefs(module.id).map((def, i, arr) => (
               <div key={def.key} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: '12px 24px', borderBottom: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none', alignItems: 'start' }}>
                 <div>
@@ -571,7 +706,6 @@ function ModuleDetail({ module, editing, editFields, saving, saveError, training
           ) : fields.length === 0 ? (
             <EmptyState label="No data yet. Click Edit to set up this module." />
           ) : (
-            // View mode: display fields (may include computed/combined values)
             fields.map(([k, v], i) => (
               <div key={k} style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 16, padding: '14px 24px', borderBottom: i < fields.length - 1 ? '1px solid var(--border-subtle)' : 'none', alignItems: 'baseline' }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', fontWeight: 500 }}>{k}</div>
@@ -585,7 +719,7 @@ function ModuleDetail({ module, editing, editFields, saving, saveError, training
   )
 }
 
-// ── HealthModuleView ─────────────────────────────────────────────────────────
+// ── HealthModuleView (view mode — unchanged) ─────────────────────────────────
 
 interface Illness {
   id?: string
@@ -596,6 +730,10 @@ interface Illness {
   symptoms?: string[]
   hrv_impact?: string
   restrictions?: string[]
+  can_cycle?: boolean
+  can_run?: boolean
+  can_swim?: boolean
+  physio_notes?: string
   date_added?: string
 }
 
@@ -606,6 +744,11 @@ interface Injury {
   date_start?: string
   date_cleared?: string | null
   restrictions?: string[]
+  can_cycle?: boolean
+  can_run?: boolean
+  can_swim?: boolean
+  physio_notes?: string
+  date_added?: string
 }
 
 function fmtHealthDate(d?: string | null): string {
@@ -794,6 +937,411 @@ function HealthModuleView({ data, onMarkIllnessRecovered, onMarkInjuryResolved }
     </div>
   )
 }
+
+// ── HealthModuleEdit (edit mode) ─────────────────────────────────────────────
+
+function HealthModuleEdit({ healthForm, onFormChange }: {
+  healthForm: HealthFormState
+  onFormChange: (s: HealthFormState) => void
+}) {
+  const [newFlagInput, setNewFlagInput] = useState('')
+  const today = new Date().toISOString().split('T')[0]
+
+  const inputStyle: React.CSSProperties = {
+    background: 'var(--bg-1)',
+    border: '1px solid var(--border-default)',
+    borderRadius: 6,
+    padding: '7px 10px',
+    color: 'var(--fg-1)',
+    fontFamily: 'inherit',
+    fontSize: 13,
+    lineHeight: 1.5,
+    outline: 'none',
+    width: '100%',
+    boxSizing: 'border-box',
+  }
+
+  const sectionLabel: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 500,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: 'var(--fg-3)',
+    marginBottom: 10,
+    fontFamily: 'var(--font-mono)',
+  }
+
+  function updateIllness(id: string, patch: Partial<IllnessForm>) {
+    onFormChange({ ...healthForm, illnessForms: healthForm.illnessForms.map((f) => f.id === id ? { ...f, ...patch } : f) })
+  }
+
+  function removeIllness(id: string) {
+    onFormChange({ ...healthForm, illnessForms: healthForm.illnessForms.filter((f) => f.id !== id) })
+  }
+
+  function addIllness() {
+    onFormChange({
+      ...healthForm,
+      illnessForms: [...healthForm.illnessForms, {
+        id: crypto.randomUUID(),
+        name: '',
+        description: '',
+        dateStart: today,
+        restrictions: '',
+        canCycle: true,
+        canRun: true,
+        canSwim: true,
+        notes: '',
+        date_added: today,
+      }],
+    })
+  }
+
+  function updateInjury(id: string, patch: Partial<InjuryForm>) {
+    onFormChange({ ...healthForm, injuryForms: healthForm.injuryForms.map((f) => f.id === id ? { ...f, ...patch } : f) })
+  }
+
+  function removeInjury(id: string) {
+    onFormChange({ ...healthForm, injuryForms: healthForm.injuryForms.filter((f) => f.id !== id) })
+  }
+
+  function addInjury() {
+    onFormChange({
+      ...healthForm,
+      injuryForms: [...healthForm.injuryForms, {
+        id: crypto.randomUUID(),
+        bodyPart: '',
+        description: '',
+        dateStart: today,
+        restrictions: '',
+        canCycle: true,
+        canRun: true,
+        canSwim: true,
+        physioNotes: '',
+        date_added: today,
+      }],
+    })
+  }
+
+  function addFlag() {
+    const v = newFlagInput.trim()
+    if (!v) return
+    onFormChange({ ...healthForm, monitoringFlags: [...healthForm.monitoringFlags, v] })
+    setNewFlagInput('')
+  }
+
+  function removeFlag(i: number) {
+    onFormChange({ ...healthForm, monitoringFlags: healthForm.monitoringFlags.filter((_, fi) => fi !== i) })
+  }
+
+  const addBtnStyle: React.CSSProperties = {
+    marginTop: 10,
+    background: 'none',
+    border: '1px dashed var(--border-default)',
+    borderRadius: 6,
+    padding: '8px 14px',
+    fontSize: 12,
+    color: 'var(--fg-3)',
+    cursor: 'pointer',
+    width: '100%',
+    textAlign: 'left',
+  }
+
+  return (
+    <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 28 }}>
+
+      {/* Section 1 — Active Illnesses */}
+      <div>
+        <div style={sectionLabel}>Active Illnesses</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {healthForm.illnessForms.length === 0 && (
+            <div style={{ fontSize: 13, color: 'var(--fg-4)', fontStyle: 'italic' }}>No active illnesses</div>
+          )}
+          {healthForm.illnessForms.map((ill) => (
+            <IllnessCard
+              key={ill.id}
+              form={ill}
+              onChange={(patch) => updateIllness(ill.id, patch)}
+              onRemove={() => removeIllness(ill.id)}
+              inputStyle={inputStyle}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={addIllness}
+          style={addBtnStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-1)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-default)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-3)' }}
+        >
+          + Add illness
+        </button>
+      </div>
+
+      {/* Section 2 — Active Injuries */}
+      <div>
+        <div style={sectionLabel}>Active Injuries</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {healthForm.injuryForms.length === 0 && (
+            <div style={{ fontSize: 13, color: 'var(--fg-4)', fontStyle: 'italic' }}>No active injuries</div>
+          )}
+          {healthForm.injuryForms.map((inj) => (
+            <InjuryCard
+              key={inj.id}
+              form={inj}
+              onChange={(patch) => updateInjury(inj.id, patch)}
+              onRemove={() => removeInjury(inj.id)}
+              inputStyle={inputStyle}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={addInjury}
+          style={addBtnStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--accent)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-1)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-default)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--fg-3)' }}
+        >
+          + Add injury
+        </button>
+      </div>
+
+      {/* Section 3 — Monitoring Flags */}
+      <div>
+        <div style={sectionLabel}>Monitoring Flags</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          {healthForm.monitoringFlags.map((flag, i) => (
+            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '4px 6px 4px 10px', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 999, fontSize: 12, color: 'var(--fg-1)' }}>
+              {flag}
+              <RemoveButton onClick={() => removeFlag(i)} />
+            </span>
+          ))}
+          <input
+            value={newFlagInput}
+            onChange={(e) => setNewFlagInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addFlag() } }}
+            placeholder="+ Add flag"
+            style={{ background: 'none', border: 'none', outline: 'none', fontSize: 12, color: 'var(--fg-2)', padding: '4px 0', minWidth: 80, cursor: 'text' }}
+          />
+        </div>
+      </div>
+
+      {/* Section 4 — General Health */}
+      <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={sectionLabel}>General Health</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, alignItems: 'center' }}>
+          <label style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', fontWeight: 500 }}>Allergies</label>
+          <input
+            value={healthForm.allergies}
+            onChange={(e) => onFormChange({ ...healthForm, allergies: e.target.value })}
+            style={inputStyle}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, alignItems: 'center' }}>
+          <label style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', fontWeight: 500 }}>Medications</label>
+          <input
+            value={healthForm.medications}
+            onChange={(e) => onFormChange({ ...healthForm, medications: e.target.value })}
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
+// ── IllnessCard ───────────────────────────────────────────────────────────────
+
+function IllnessCard({ form, onChange, onRemove, inputStyle }: {
+  form: IllnessForm
+  onChange: (patch: Partial<IllnessForm>) => void
+  onRemove: () => void
+  inputStyle: React.CSSProperties
+}) {
+  const fieldLabel: React.CSSProperties = {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: 'var(--fg-3)',
+    fontWeight: 500,
+    marginBottom: 4,
+    display: 'block',
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-3)', border: '1px solid var(--border-default)', borderRadius: 8, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 15 }}>🤒</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{form.name || 'New illness'}</span>
+        </div>
+        <RemoveButton onClick={onRemove} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label style={fieldLabel}>Name</label>
+          <input value={form.name} onChange={(e) => onChange({ name: e.target.value })} style={inputStyle} placeholder="e.g. Cold" />
+        </div>
+        <div>
+          <label style={fieldLabel}>Date started</label>
+          <input type="date" value={form.dateStart} onChange={(e) => onChange({ dateStart: e.target.value })} style={inputStyle} />
+        </div>
+      </div>
+      <div>
+        <label style={fieldLabel}>Description</label>
+        <input value={form.description} onChange={(e) => onChange({ description: e.target.value })} style={inputStyle} placeholder="e.g. Upper respiratory infection" />
+      </div>
+      <div>
+        <label style={fieldLabel}>Restrictions (one per line)</label>
+        <textarea
+          value={form.restrictions}
+          onChange={(e) => onChange({ restrictions: e.target.value })}
+          rows={2}
+          placeholder="e.g. No quality training until HRV normalises"
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </div>
+      <div>
+        <label style={fieldLabel}>Can train</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <TogglePill label="Cycle" checked={form.canCycle} onChange={(v) => onChange({ canCycle: v })} />
+          <TogglePill label="Run" checked={form.canRun} onChange={(v) => onChange({ canRun: v })} />
+          <TogglePill label="Swim" checked={form.canSwim} onChange={(v) => onChange({ canSwim: v })} />
+        </div>
+      </div>
+      <div>
+        <label style={fieldLabel}>Notes</label>
+        <input value={form.notes} onChange={(e) => onChange({ notes: e.target.value })} style={inputStyle} placeholder="Additional notes" />
+      </div>
+    </div>
+  )
+}
+
+// ── InjuryCard ────────────────────────────────────────────────────────────────
+
+function InjuryCard({ form, onChange, onRemove, inputStyle }: {
+  form: InjuryForm
+  onChange: (patch: Partial<InjuryForm>) => void
+  onRemove: () => void
+  inputStyle: React.CSSProperties
+}) {
+  const fieldLabel: React.CSSProperties = {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: 'var(--fg-3)',
+    fontWeight: 500,
+    marginBottom: 4,
+    display: 'block',
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-3)', border: '1px solid var(--border-default)', borderRadius: 8, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 15 }}>🩹</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{form.bodyPart || 'New injury'}</span>
+        </div>
+        <RemoveButton onClick={onRemove} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <label style={fieldLabel}>Body part</label>
+          <input value={form.bodyPart} onChange={(e) => onChange({ bodyPart: e.target.value })} style={inputStyle} placeholder="e.g. Left knee" />
+        </div>
+        <div>
+          <label style={fieldLabel}>Date started</label>
+          <input type="date" value={form.dateStart} onChange={(e) => onChange({ dateStart: e.target.value })} style={inputStyle} />
+        </div>
+      </div>
+      <div>
+        <label style={fieldLabel}>Description</label>
+        <input value={form.description} onChange={(e) => onChange({ description: e.target.value })} style={inputStyle} placeholder="e.g. Patellar tendinopathy" />
+      </div>
+      <div>
+        <label style={fieldLabel}>Restrictions (one per line)</label>
+        <textarea
+          value={form.restrictions}
+          onChange={(e) => onChange({ restrictions: e.target.value })}
+          rows={2}
+          placeholder="e.g. No running downhill"
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </div>
+      <div>
+        <label style={fieldLabel}>Can train</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <TogglePill label="Cycle" checked={form.canCycle} onChange={(v) => onChange({ canCycle: v })} />
+          <TogglePill label="Run" checked={form.canRun} onChange={(v) => onChange({ canRun: v })} />
+          <TogglePill label="Swim" checked={form.canSwim} onChange={(v) => onChange({ canSwim: v })} />
+        </div>
+      </div>
+      <div>
+        <label style={fieldLabel}>Physio notes</label>
+        <input value={form.physioNotes} onChange={(e) => onChange({ physioNotes: e.target.value })} style={inputStyle} placeholder="Notes from physio" />
+      </div>
+    </div>
+  )
+}
+
+// ── TogglePill ────────────────────────────────────────────────────────────────
+
+function TogglePill({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      style={{
+        padding: '4px 12px',
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 500,
+        cursor: 'pointer',
+        border: '1px solid',
+        borderColor: checked ? 'var(--success, #48bb78)' : 'var(--border-default)',
+        background: checked ? 'rgba(72, 187, 120, 0.12)' : 'transparent',
+        color: checked ? 'var(--success, #48bb78)' : 'var(--fg-4)',
+        outline: 'none',
+        lineHeight: 1.4,
+        transition: 'all 0.12s',
+      }}
+    >
+      {checked ? '✓' : '✗'} {label}
+    </button>
+  )
+}
+
+// ── RemoveButton ──────────────────────────────────────────────────────────────
+
+function RemoveButton({ onClick }: { onClick: () => void }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        padding: '2px 5px',
+        borderRadius: 4,
+        fontSize: 14,
+        lineHeight: 1,
+        color: hovered ? 'var(--error, #e05252)' : 'var(--fg-4)',
+        transition: 'color 0.1s',
+        outline: 'none',
+      }}
+      title="Remove"
+    >
+      ×
+    </button>
+  )
+}
+
+// ── EmptyState ────────────────────────────────────────────────────────────────
 
 function EmptyState({ label }: { label: string }) {
   return (

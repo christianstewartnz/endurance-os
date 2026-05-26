@@ -159,9 +159,11 @@ function buildPatternsLayer(patterns: Record<string, unknown>[]): string {
 
   const items = patterns.map((p) => {
     const conf = (p.confidence as string ?? 'low').toUpperCase()
-    return `[${conf} · ${p.category ?? 'general'} · ${p.sport ?? 'general'}]
-${p.pattern_text}
-Observed ${p.observation_count ?? 1} times${p.first_observed_date ? ` · first seen ${p.first_observed_date}` : ''}${p.last_observed_date ? ` · last seen ${p.last_observed_date}` : ''}`
+    const count = p.observation_count ?? 1
+    const times = count === 1 ? '1 time' : `${count} times`
+    return `[pattern:${p.id}] Category: ${p.category ?? 'general'}${p.sport && p.sport !== 'general' ? ` · ${p.sport}` : ''}
+"${p.pattern_text}"
+Confidence: ${conf} · Observed ${times}${p.first_observed_date ? ` · first seen ${p.first_observed_date}` : ''}${p.last_observed_date ? ` · last seen ${p.last_observed_date}` : ''}`
   }).join('\n\n')
 
   return `════════════════════════════════════════
@@ -481,6 +483,25 @@ For illness — adding new (use target_field "illnesses"):
 
 For illness — marking resolved (use the [illness_N] index shown in HEALTH & INJURY):
 {"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"archive","suggested_value":"Cold cleared — athlete confirmed symptoms resolved and HRV returning to baseline","reasoning":"Athlete confirmed recovery","evidence":"HRV back within 3% of baseline, symptoms gone"}}
+
+ARCHIVE ILLNESS — MANDATORY PATTERN REVIEW:
+When archiving an illness, always scan TRAINING PATTERNS for any restriction-style patterns
+that were created alongside the illness and propose removing them.
+
+  KEEP patterns that are physiological observations (long-term value):
+    ✓ "Upper respiratory illness causes 5-7 day HRV suppression beyond symptom resolution"
+    ✓ "HRV drops 25%+ during overreaching phases"
+
+  PROPOSE REMOVE for patterns that are actually restrictions or instructions:
+    ✗ "No training until HRV normalises"
+    ✗ "Rest until feeling better"
+    ✗ Any pattern containing "no training", "rest until", "avoid until"
+    ✗ Any pattern that is clearly an instruction rather than an observation
+    ✗ Any pattern created at the same time as the illness being archived
+
+Example — when clearing an illness, propose both the archive AND any restriction removals:
+{"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"archive","suggested_value":"Cold cleared — athlete confirmed symptoms resolved and HRV returning to baseline","reasoning":"Athlete confirmed recovery","evidence":"HRV back within 3% of baseline, symptoms gone"}}
+{"context_update":{"target_module":"training_patterns","target_field":"<pattern-uuid>","action_type":"remove","suggested_value":null,"reasoning":"This is a restriction not a pattern — removing now illness is cleared","evidence":"Pattern contains instruction language ('no training until HRV normalises') not observational language"}}
 
 For physical injuries — adding new (use target_field "active_injuries"):
 {"context_update":{"target_module":"health_injury","target_field":"active_injuries","action_type":"append","suggested_value":"{\"body_part\":\"left knee\",\"description\":\"IT band strain\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no running for 4 weeks\"],\"can_cycle\":true,\"can_swim\":true,\"can_strength\":false,\"date_cleared\":null}","reasoning":"Athlete confirmed knee injury","evidence":"Pain on lateral knee during long run, confirmed by physio"}}
