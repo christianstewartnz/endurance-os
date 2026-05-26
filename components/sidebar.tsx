@@ -4,6 +4,13 @@ import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Icon, Kbd } from '@/components/atoms'
 
+interface NextRace {
+  id: string
+  race_name: string
+  race_date: string
+  priority: 'A' | 'B' | 'C'
+}
+
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: 'layout-dashboard', kbd: '⌘1' },
   { path: '/calendar',  label: 'Calendar',  icon: 'calendar',         kbd: '⌘2' },
@@ -16,16 +23,39 @@ interface SidebarProps {
   onSearch?: () => void
 }
 
+function parseDateLocal(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+function daysUntil(dateStr: string): number {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return Math.ceil((parseDateLocal(dateStr).getTime() - today.getTime()) / 86400000)
+}
+
+function formatShortDate(dateStr: string): string {
+  return parseDateLocal(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export default function Sidebar({ onSearch }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [contextDot, setContextDot] = useState(false)
+  const [nextRace, setNextRace] = useState<NextRace | null | undefined>(undefined)
 
   useEffect(() => {
     fetch('/api/context/suggestions/pending')
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (d) setContextDot(d.suggestions.length > 0) })
       .catch(() => {})
+  }, [pathname])
+
+  useEffect(() => {
+    fetch('/api/races/next')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { setNextRace(d?.race ?? null) })
+      .catch(() => { setNextRace(null) })
   }, [pathname])
 
   return (
@@ -135,15 +165,33 @@ export default function Sidebar({ onSearch }: SidebarProps) {
           <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 4 }}>
             Next race
           </div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)', letterSpacing: '-0.01em' }}>
-            Ironman 70.3 Lahti
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 6 }}>
-            <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>Aug 16</span>
-            <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontWeight: 500 }}>
-              74<span style={{ color: 'var(--fg-3)', fontWeight: 400 }}>d</span>
-            </span>
-          </div>
+          {nextRace === undefined ? (
+            <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>—</div>
+          ) : nextRace === null ? (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--fg-4)', marginBottom: 6 }}>No upcoming races</div>
+              <button
+                onClick={() => router.push('/races')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--accent)', padding: 0 }}
+              >
+                + Add race
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-1)', letterSpacing: '-0.01em' }}>
+                {nextRace.race_name}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+                  {formatShortDate(nextRace.race_date)}
+                </span>
+                <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', color: 'var(--accent)', fontWeight: 500 }}>
+                  {daysUntil(nextRace.race_date)}<span style={{ color: 'var(--fg-3)', fontWeight: 400 }}>d</span>
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </aside>

@@ -189,6 +189,30 @@ ADAPTATION RULES (${rules.length} active)
 ${items}`
 }
 
+function formatTimeSecs(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.round(seconds % 60)
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function buildNotesSection(
+  notes: Array<{ category: string; note: string }> | null | undefined,
+  categories: string[],
+  label: string,
+): string {
+  if (!Array.isArray(notes) || notes.length === 0) return ''
+  const lines: string[] = [`${label}:`]
+  for (const cat of categories) {
+    const items = notes.filter((n) => n.category === cat)
+    if (items.length) {
+      lines.push(`  ${cat.replace(/_/g, ' ')}: ${items.map((n) => n.note).join(' · ')}`)
+    }
+  }
+  return lines.length > 1 ? lines.join('\n') : ''
+}
+
 function buildRacesLayer(races: Record<string, unknown>[]): string {
   if (!races.length) return ''
 
@@ -196,23 +220,41 @@ function buildRacesLayer(races: Record<string, unknown>[]): string {
   const items = races.map((r) => {
     const raceDate = r.race_date ? parseDateLocal(r.race_date as string) : null
     const daysAway = raceDate ? Math.ceil((raceDate.getTime() - today.getTime()) / 86400000) : null
-    const legTargets = r.per_leg_targets as Record<string, { time_seconds?: number; power_watts?: number; pace_per_km_seconds?: number; notes?: string }> | null
+    const legTargets = r.per_leg_targets as Record<string, { time_seconds?: number; power_watts?: number; pace_per_km_seconds?: number; intensity_factor?: number; notes?: string }> | null
+
+    const goalTime = r.overall_goal_time_seconds ? formatTimeSecs(r.overall_goal_time_seconds as number) : null
+    const goalStr  = [goalTime, r.overall_goal_position].filter(Boolean).join(' · ') || '—'
 
     let section = `[${r.priority ?? 'B'}-RACE] ${r.race_name} · ${r.race_date ?? '—'}${daysAway != null ? ` · ${daysAway} days away` : ''}
 Location: ${r.location ?? '—'}
-Overall goal: ${r.overall_goal_time_seconds ? formatPace(r.overall_goal_time_seconds as number / 60) : '—'}${r.overall_goal_position ? ` · ${r.overall_goal_position}` : ''}
-${r.notes ? `Notes: ${r.notes}` : ''}${r.stretch_goal ? `\nStretch goal: ${r.stretch_goal}` : ''}`
+Goal: ${goalStr}
+${r.stretch_goal ? `Stretch: ${r.stretch_goal}\n` : ''}${r.general_notes ? `Notes: ${r.general_notes}\n` : ''}`
 
     if (legTargets) {
       const legLines = Object.entries(legTargets).map(([leg, t]) => {
-        const parts = [`${leg.charAt(0).toUpperCase() + leg.slice(1)}`]
-        if (t.time_seconds) parts.push(formatPace(t.time_seconds / 60))
-        if (t.power_watts) parts.push(`${t.power_watts}W`)
-        if (t.notes) parts.push(t.notes)
-        return parts.join(': ')
+        const parts: string[] = [leg.charAt(0).toUpperCase() + leg.slice(1)]
+        if (t.time_seconds) parts.push(formatTimeSecs(t.time_seconds))
+        if (t.power_watts) parts.push(`@ ${t.power_watts}W`)
+        if (t.intensity_factor) parts.push(`(IF ${t.intensity_factor.toFixed(2)})`)
+        if (t.pace_per_km_seconds) parts.push(`(${formatPace(t.pace_per_km_seconds)})`)
+        if (t.notes) parts.push(`— ${t.notes}`)
+        return parts.join(' ')
       })
-      if (legLines.length) section += `\nLeg targets:\n  ${legLines.join('\n  ')}`
+      if (legLines.length) section += `Leg targets:\n  ${legLines.join('\n  ')}`
     }
+
+    const pacingNotes = r.pacing_notes as Array<{ category: string; note: string }> | null
+    const fuelingNotes = r.fueling_notes as Array<{ category: string; note: string }> | null
+    const equipmentNotes = r.equipment_notes as Array<{ category: string; note: string }> | null
+
+    const pacingStr = buildNotesSection(pacingNotes, ['swim','bike','run','transition','mental','general'], 'Pacing strategy')
+    const fuelingStr = buildNotesSection(fuelingNotes, ['pre_race','bike','run','caffeine','hydration','general'], 'Fueling strategy')
+    const equipmentStr = buildNotesSection(equipmentNotes, ['bike','wheels','helmet','wetsuit','shoes','tri_suit','general'], 'Equipment')
+
+    if (pacingStr) section += `\n${pacingStr}`
+    if (fuelingStr) section += `\n${fuelingStr}`
+    if (equipmentStr) section += `\n${equipmentStr}`
+
     return section
   }).join('\n\n')
 
