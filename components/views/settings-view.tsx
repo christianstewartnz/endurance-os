@@ -16,13 +16,19 @@ interface AnthropicKeyState {
   last4: string | null
 }
 
+interface AthleteProfileData {
+  name?: string | null
+  location?: string | null
+}
+
 interface SettingsViewProps {
   intervalsConnection?: IntervalsConnectionState
   anthropicKeyState?: AnthropicKeyState
   userEmail?: string | null
+  athleteProfile?: AthleteProfileData | null
 }
 
-export default function SettingsView({ intervalsConnection, anthropicKeyState, userEmail }: SettingsViewProps) {
+export default function SettingsView({ intervalsConnection, anthropicKeyState, userEmail, athleteProfile }: SettingsViewProps) {
   const [section, setSection] = useState('connections')
   const sections = [
     { id: 'account',     label: 'Account',    icon: 'user' },
@@ -61,7 +67,7 @@ export default function SettingsView({ intervalsConnection, anthropicKeyState, u
         </div>
 
         <div>
-          {section === 'account'     && <AccountPanel email={userEmail ?? null} />}
+          {section === 'account'     && <AccountPanel email={userEmail ?? null} initialProfile={athleteProfile ?? null} />}
           {section === 'connections' && <ConnectionsPanel intervals={intervalsConnection} />}
           {section === 'ai'          && <AIModelComingSoonPanel />}
           {section === 'keys'        && <APIKeysPanel initial={anthropicKeyState} />}
@@ -74,34 +80,135 @@ export default function SettingsView({ intervalsConnection, anthropicKeyState, u
 
 // ── Account panel ─────────────────────────────────────────────────────────────
 
-function AccountPanel({ email }: { email: string | null }) {
-  const [pending, startTransition] = useTransition()
+function InlineEditField({ label, value, placeholder, onSave }: {
+  label: string
+  value: string | null | undefined
+  placeholder: string
+  onSave: (v: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value ?? '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function save() {
+    setSaving(true); setErr(null)
+    try {
+      await onSave(draft)
+      setEditing(false)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Save failed')
+    }
+    setSaving(false)
+  }
+
+  const fieldStyle: React.CSSProperties = { padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }
+  const inputStyle: React.CSSProperties = { background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 5, padding: '5px 10px', color: 'var(--fg-1)', fontSize: 13, outline: 'none', minWidth: 200 }
 
   return (
-    <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Account</h2>
-        <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Your Endurance OS login details.</div>
-      </div>
-
-      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Email</div>
-        <div style={{ fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)' }}>{email ?? '—'}</div>
-      </div>
-
-      <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>Sign out</div>
-          <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>You will be redirected to the login page.</div>
+    <div style={fieldStyle}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', flexShrink: 0 }}>{label}</div>
+      {editing ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: 1, justifyContent: 'flex-end' }}>
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+            placeholder={placeholder}
+            style={inputStyle}
+          />
+          <Button kind="primary" size="sm" onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
+          <Button kind="ghost" size="sm" onClick={() => { setEditing(false); setDraft(value ?? '') }}>Cancel</Button>
+          {err && <span style={{ fontSize: 11, color: 'var(--danger)' }}>{err}</span>}
         </div>
-        <Button
-          kind="ghost"
-          size="sm"
-          icon="log-out"
-          onClick={() => startTransition(() => { signoutAction() })}
-        >
-          {pending ? 'Signing out…' : 'Sign out'}
-        </Button>
+      ) : (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span style={{ fontSize: 13, color: value ? 'var(--fg-1)' : 'var(--fg-4)' }}>
+            {value || <span style={{ fontStyle: 'italic' }}>Not set</span>}
+          </span>
+          <Button kind="ghost" size="sm" icon="pencil-line" onClick={() => { setDraft(value ?? ''); setEditing(true) }}>Edit</Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AccountPanel({ email, initialProfile }: { email: string | null; initialProfile: { name?: string | null; location?: string | null } | null }) {
+  const [pending, startTransition] = useTransition()
+  const [profile, setProfile] = useState({ name: initialProfile?.name ?? null, location: initialProfile?.location ?? null })
+
+  async function saveField(field: 'name' | 'location', value: string) {
+    const res = await fetch('/api/context/athlete_profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [field]: value || null }),
+    })
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}))
+      throw new Error(b.error ?? `Save failed (HTTP ${res.status})`)
+    }
+    setProfile((p) => ({ ...p, [field]: value || null }))
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Account details</h2>
+          <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>Your identity and login information.</div>
+        </div>
+
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)' }}>Email</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)' }}>{email ?? '—'}</span>
+            <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', background: 'var(--bg-3)', border: '1px solid var(--border-subtle)', padding: '1px 6px', borderRadius: 3 }}>read only</span>
+          </div>
+        </div>
+
+        <InlineEditField
+          label="Name"
+          value={profile.name}
+          placeholder="Your name"
+          onSave={(v) => saveField('name', v)}
+        />
+
+        <InlineEditField
+          label="Location"
+          value={profile.location}
+          placeholder="City, Country"
+          onSave={(v) => saveField('location', v)}
+        />
+      </div>
+
+      <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Danger zone</h2>
+        </div>
+
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>Sign out</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>You will be redirected to the login page.</div>
+          </div>
+          <Button
+            kind="ghost"
+            size="sm"
+            icon="log-out"
+            onClick={() => startTransition(() => { signoutAction() })}
+          >
+            {pending ? 'Signing out…' : 'Sign out'}
+          </Button>
+        </div>
+
+        <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: 0.4, pointerEvents: 'none' }}>
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--fg-1)' }}>Delete account</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 2 }}>Permanently remove your account and all data.</div>
+          </div>
+          <Button kind="ghost" size="sm" icon="trash-2">Delete account</Button>
+        </div>
       </div>
     </div>
   )

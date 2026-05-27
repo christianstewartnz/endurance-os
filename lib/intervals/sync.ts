@@ -57,14 +57,6 @@ function mapActivityType(intervalsType: string): string {
   return map[intervalsType] ?? 'general'
 }
 
-function extractBestPower(gaps: unknown, targetSecs: number): number | null {
-  if (!Array.isArray(gaps)) return null
-  const entry = (gaps as { secs?: number; watts?: number }[]).find(
-    (g) => g.secs === targetSecs
-  )
-  return typeof entry?.watts === 'number' ? entry.watts : null
-}
-
 // Strip leading 'i' from intervals.icu activity IDs for URL path and map keys.
 // List endpoint returns ids like "i150683451"; detail endpoint expects and returns "150683451".
 function normalizeActivityId(id: string): string {
@@ -204,8 +196,6 @@ export async function syncActivities(userId: string): Promise<void> {
         ? a.elapsed_time / (a.distance / 1000)
         : null
 
-    const gaps = a.icu_gaps ?? null
-
     return {
       user_id: userId,
       session_id: String(a.id),
@@ -217,30 +207,28 @@ export async function syncActivities(userId: string): Promise<void> {
       actual_duration_seconds: roundOrNull(a.elapsed_time),
       avg_hr: roundOrNull(a.average_heartrate),
       max_hr: roundOrNull(a.max_heartrate),
-      cardiac_drift_percent: a.cardiac_drift_percent ?? null,
+      cardiac_drift_percent: null,  // not in Intervals.icu API
       is_archived: false,
-      // Power — detail endpoint fields (icu_average_watts / icu_weighted_avg_watts)
-      avg_power_watts: detail?.icu_average_watts != null
-        ? Math.round(detail.icu_average_watts)
-        : roundOrNull(a.average_watts),
-      normalized_power_watts: detail?.icu_weighted_avg_watts != null
-        ? Math.round(detail.icu_weighted_avg_watts)
-        : roundOrNull(a.weighted_average_watts),
-      max_power_watts: detail?.max_watts != null ? Math.round(detail.max_watts) : roundOrNull(a.max_watts),
-      total_work_kj: detail?.total_work != null
-        ? Math.round(detail.total_work / 1000)
-        : a.total_work != null ? Math.round(a.total_work / 1000) : null,
-      best_20min_power: detail?.icu_20min_watts != null ? Math.round(detail.icu_20min_watts) : extractBestPower(gaps, 1200),
-      best_60min_power: detail?.icu_60min_watts != null ? Math.round(detail.icu_60min_watts) : extractBestPower(gaps, 3600),
-      best_5min_power:  detail?.icu_5min_watts  != null ? Math.round(detail.icu_5min_watts)  : null,
-      best_1min_power:  detail?.icu_1min_watts  != null ? Math.round(detail.icu_1min_watts)  : null,
-      best_5sec_power:  detail?.icu_5sec_watts  != null ? Math.round(detail.icu_5sec_watts)  : null,
+      // Power
+      avg_power_watts: roundOrNull(detail?.icu_average_watts ?? a.icu_average_watts),
+      normalized_power_watts: roundOrNull(detail?.icu_weighted_avg_watts ?? a.icu_weighted_avg_watts),
+      max_power_watts: roundOrNull(detail?.p_max ?? a.p_max),
+      total_work_kj: (() => {
+        const j = detail?.icu_joules ?? a.icu_joules
+        return j != null ? Math.round(j / 1000) : null
+      })(),
+      // Best-effort power — not available from Intervals.icu activity API
+      best_5sec_power:  null,
+      best_1min_power:  null,
+      best_5min_power:  null,
+      best_20min_power: null,
+      best_60min_power: null,
       // Training metrics
       intensity_factor: a.icu_intensity ?? null,
-      variability_index: a.icu_variability ?? null,
+      variability_index: a.icu_variability_index ?? null,
       efficiency_factor: a.icu_efficiency_factor ?? null,
-      aerobic_decoupling: a.icu_aerobic_decoupling ?? null,
-      hrss: a.icu_hrss ?? null,
+      aerobic_decoupling: a.decoupling ?? null,
+      hrss: null,  // not in Intervals.icu API
       // Movement
       distance_meters: a.distance ?? null,
       elevation_gain_meters: a.total_elevation_gain ?? null,
@@ -248,17 +236,17 @@ export async function syncActivities(userId: string): Promise<void> {
       max_speed_kph: maxSpeedKph,
       avg_cadence: !isSwim ? roundOrNull(a.average_cadence) : null,
       pace_per_km: pacePerKm,
-      // Running best paces (seconds/km)
-      best_1km_pace:          detail?.icu_1km_pace           ?? null,
-      best_5km_pace:          detail?.icu_5km_pace           ?? null,
-      best_10km_pace:         detail?.icu_10km_pace          ?? null,
-      best_half_marathon_pace: detail?.icu_half_marathon_pace ?? null,
+      // Best-effort paces — not available from Intervals.icu activity API
+      best_1km_pace:           null,
+      best_5km_pace:           null,
+      best_10km_pace:          null,
+      best_half_marathon_pace: null,
+      best_100m_pace:          null,
+      best_400m_pace:          null,
       // Swimming
-      best_100m_pace:         detail?.icu_100m_pace          ?? null,
-      best_400m_pace:         detail?.icu_400m_pace          ?? null,
-      pool_length:            a.pool_length                  ?? null,
-      total_strokes:          a.total_strokes                ?? null,
-      avg_stroke_rate:        a.average_stroke_rate          ?? null,
+      pool_length:            a.pool_length           ?? null,
+      total_strokes:          a.total_strokes          ?? null,
+      avg_stroke_rate:        a.average_stroke_rate    ?? null,
       avg_strokes_per_length: detail?.avg_strokes_per_length ?? null,
       // Other
       calories: roundOrNull(a.calories),
@@ -274,7 +262,7 @@ export async function syncActivities(userId: string): Promise<void> {
         if (!power && !hr) return null
         return { power, hr }
       })(),
-      gaps: gaps,
+      gaps: null,
       intervals_data: detail?.icu_groups ?? detail?.icu_intervals ?? null,
     }
   })
@@ -287,6 +275,24 @@ export async function syncActivities(userId: string): Promise<void> {
 
   if (error) {
     console.error('[intervals] syncActivities upsert error', error)
+  }
+
+  // Log any PB achievements Intervals.icu flagged on these activities
+  for (const activity of activities) {
+    const achievements = activity.icu_achievements ?? []
+    if (achievements.length === 0) continue
+    const powerPBs = achievements.filter((a) => a.type === 'BEST_POWER')
+    const pacePBs  = achievements.filter((a) =>
+      a.type?.includes('BEST_PACE') || a.type?.includes('BEST_DISTANCE')
+    )
+    if (powerPBs.length > 0 || pacePBs.length > 0) {
+      console.log('[sync] Achievements in activity:', activity.id, {
+        date: activity.start_date_local.split('T')[0],
+        powerPBs,
+        pacePBs,
+        allTypes: achievements.map((a) => a.type),
+      })
+    }
   }
 }
 
@@ -347,9 +353,188 @@ export async function syncFitnessMetrics(userId: string): Promise<void> {
   }
 }
 
+type PBMetric = { value: number | null; unit: string; source: string; date: string | null }
+type PBSportMap = Record<string, PBMetric>
+type PBMap = { cycling?: PBSportMap; running?: PBSportMap; swimming?: PBSportMap }
+
+type CurveShape = { secs?: number[]; distance?: number[]; values?: number[]; activity_id?: string[] }
+type ActivityMap = Record<string, { start_date_local?: string }>
+
+function extractPowerWithDate(
+  list: unknown[],
+  secs: number,
+  activities: ActivityMap,
+): { value: number | null; date: string | null } {
+  const curve = (list?.[0] ?? null) as CurveShape | null
+  if (!curve?.secs || !curve?.values) return { value: null, date: null }
+  const idx = curve.secs.indexOf(secs)
+  if (idx < 0) return { value: null, date: null }
+  const value = curve.values[idx] ?? null
+  const activityId = curve.activity_id?.[idx]
+  const date = activityId ? (activities[activityId]?.start_date_local?.split('T')[0] ?? null) : null
+  return { value, date }
+}
+
+function extractPaceWithDate(
+  list: unknown[],
+  distanceMeters: number,
+  activities: ActivityMap,
+): { value: number | null; date: string | null } {
+  const curve = (list?.[0] ?? null) as CurveShape | null
+  if (!curve?.distance || !curve?.values) return { value: null, date: null }
+  const idx = curve.distance.indexOf(distanceMeters)
+  if (idx < 0) return { value: null, date: null }
+  const value = curve.values[idx] ?? null
+  const activityId = curve.activity_id?.[idx]
+  const date = activityId ? (activities[activityId]?.start_date_local?.split('T')[0] ?? null) : null
+  return { value, date }
+}
+
+function mergePBs(current: PBMap, newAuto: PBMap): PBMap {
+  const result: PBMap = { ...current }
+  for (const [sport, metrics] of Object.entries(newAuto) as [keyof PBMap, PBSportMap][]) {
+    result[sport] = result[sport] ?? {}
+    for (const [metric, val] of Object.entries(metrics)) {
+      const existing = result[sport]![metric]
+      // Never overwrite a manual entry
+      if (existing?.source === 'manual') continue
+      // Only update if new value exists and is better (higher for power, lower for pace)
+      const existingVal = existing?.value ?? null
+      const newVal = val.value
+      if (newVal !== null) {
+        const isWatts = val.unit === 'W'
+        const isBetter = existingVal === null ||
+          (isWatts ? newVal > existingVal : newVal < existingVal)
+        if (isBetter) result[sport]![metric] = val
+      }
+    }
+  }
+  return result
+}
+
+async function savePBs(userId: string, newPbs: PBMap): Promise<void> {
+  const supabase = createAdminClient()
+  const { data } = await supabase
+    .from('athlete_profile')
+    .select('pbs')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  const current = (data?.pbs ?? {}) as PBMap
+  const merged = mergePBs(current, newPbs)
+
+  const { error } = await supabase
+    .from('athlete_profile')
+    .update({ pbs: merged })
+    .eq('user_id', userId)
+
+  if (error) {
+    console.error('[sync] savePBs error:', error)
+  } else {
+    console.log('[sync] PBs saved:', JSON.stringify(merged))
+  }
+}
+
+export async function syncPBs(userId: string): Promise<void> {
+  const creds = await getUserCredentials(userId)
+  if (!creds) return
+
+  const client = createIntervalsClient(creds.apiKey, creds.athleteId)
+
+  console.log('[sync] Starting PB sync')
+
+  // ── Cycling power curves ──────────────────────────────────────────────────
+  let powerCurves: unknown = null
+  try {
+    powerCurves = await client.getPowerCurves('all')
+    console.log('[sync] Power curves response:', JSON.stringify(powerCurves)?.slice(0, 500))
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[sync] Power curves fetch error:', msg)
+    console.log('[sync] Power curves not available — will rely on icu_achievements from activity sync')
+  }
+
+  const powerRes  = powerCurves as { list?: unknown[]; activities?: ActivityMap } | null
+  const powerList = powerRes?.list ?? null
+  const powerActivities: ActivityMap = powerRes?.activities ?? {}
+
+  let cycling: PBSportMap | undefined
+
+  if (powerList?.[0]) {
+    const curve = powerList[0] as CurveShape
+    console.log('[sync] Power curve secs:', curve.secs?.slice(0, 15))
+    console.log('[sync] Power curve values:', curve.values?.slice(0, 15))
+    console.log('[sync] Power curve activity_ids (first 5):', curve.activity_id?.slice(0, 5))
+
+    const ex = (secs: number) => extractPowerWithDate(powerList, secs, powerActivities)
+
+    cycling = {
+      power_5s:    { ...ex(5),    unit: 'W', source: 'auto' },
+      power_1min:  { ...ex(60),   unit: 'W', source: 'auto' },
+      power_5min:  { ...ex(300),  unit: 'W', source: 'auto' },
+      power_20min: { ...ex(1200), unit: 'W', source: 'auto' },
+      power_60min: { ...ex(3600), unit: 'W', source: 'auto' },
+    }
+    console.log('[sync] Cycling PBs extracted:', cycling)
+  } else {
+    console.log('[sync] No power curve list in response — endpoint may require different params or subscription tier')
+  }
+
+  // ── Running pace curves ───────────────────────────────────────────────────
+  let paceCurves: unknown = null
+  try {
+    paceCurves = await client.getPaceCurves('all')
+    console.log('[sync] Pace curves response:', JSON.stringify(paceCurves)?.slice(0, 500))
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[sync] Pace curves fetch error:', msg)
+  }
+
+  const paceRes  = paceCurves as { list?: unknown[]; activities?: ActivityMap } | null
+  const paceList = paceRes?.list ?? null
+  const paceActivities: ActivityMap = paceRes?.activities ?? {}
+
+  let running: PBSportMap | undefined
+
+  if (paceList?.[0]) {
+    const curve = paceList[0] as CurveShape
+    console.log('[sync] Pace curve distance:', curve.distance?.slice(0, 15))
+    console.log('[sync] Pace curve values:', curve.values?.slice(0, 15))
+    console.log('[sync] Pace curve activity_ids (first 5):', curve.activity_id?.slice(0, 5))
+
+    const ex = (meters: number) => extractPaceWithDate(paceList, meters, paceActivities)
+
+    running = {
+      pace_1km:           { ...ex(1000),  unit: 'sec/km', source: 'auto' },
+      pace_5km:           { ...ex(5000),  unit: 'sec/km', source: 'auto' },
+      pace_10km:          { ...ex(10000), unit: 'sec/km', source: 'auto' },
+      pace_half_marathon: { ...ex(21097), unit: 'sec/km', source: 'auto' },
+      pace_marathon:      { ...ex(42195), unit: 'sec/km', source: 'auto' },
+    }
+    console.log('[sync] Running PBs extracted:', running)
+  } else {
+    console.log('[sync] No pace curve list in response')
+  }
+
+  // ── Save — only sports with at least one real value ───────────────────────
+  const hasCycling = cycling != null && Object.values(cycling).some((v) => v.value !== null)
+  const hasRunning = running != null && Object.values(running).some((v) => v.value !== null)
+
+  const pbsToSave: PBMap = {}
+  if (hasCycling) pbsToSave.cycling = cycling
+  if (hasRunning) pbsToSave.running = running
+
+  if (Object.keys(pbsToSave).length > 0) {
+    await savePBs(userId, pbsToSave)
+  } else {
+    console.log('[sync] No PB values found — nothing saved')
+  }
+}
+
 export async function syncAll(userId: string): Promise<{ success: boolean; errors: string[] }> {
   const errors: string[] = []
 
+  // Wellness and fitness metrics run in parallel with activities
   const results = await Promise.allSettled([
     syncWellness(userId),
     syncActivities(userId),
@@ -364,6 +549,15 @@ export async function syncAll(userId: string): Promise<{ success: boolean; error
       errors.push(`${label}: ${msg}`)
     }
   })
+
+  // PB sync runs after activities so icu_achievements are already logged
+  try {
+    await syncPBs(userId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[intervals] syncAll pbs rejected:', msg)
+    errors.push(`pbs: ${msg}`)
+  }
 
   // Update last sync timestamp
   const supabase = createAdminClient()

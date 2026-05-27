@@ -10,11 +10,18 @@ export default async function SettingsPage() {
   if (!user) redirect('/login')
 
   const admin = createAdminClient()
-  const { data: userData } = await admin
-    .from('users')
-    .select('intervals_athlete_id, intervals_api_key, last_intervals_sync, intervals_connection_invalid, anthropic_api_key')
-    .eq('id', user.id)
-    .single()
+  const [{ data: userData }, { data: athleteData }] = await Promise.all([
+    admin
+      .from('users')
+      .select('intervals_athlete_id, intervals_api_key, last_intervals_sync, intervals_connection_invalid, anthropic_api_key')
+      .eq('id', user.id)
+      .single(),
+    admin
+      .from('athlete_profile')
+      .select('name, location')
+      .eq('user_id', user.id)
+      .maybeSingle(),
+  ])
 
   const intervalsConnection = {
     isConnected: !!(userData?.intervals_api_key && userData?.intervals_athlete_id),
@@ -38,6 +45,7 @@ export default async function SettingsPage() {
         intervalsConnection={intervalsConnection}
         anthropicKeyState={anthropicKeyState}
         userEmail={userEmail}
+        athleteProfile={athleteData ? { name: athleteData.name as string | null, location: athleteData.location as string | null } : null}
       />
     </AppShell>
   )

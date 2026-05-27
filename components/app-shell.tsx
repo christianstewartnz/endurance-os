@@ -82,7 +82,7 @@ export default function AppShell({ children, fullWidth = false, userName, userEm
   return (
     <CoachCtx.Provider value={{ openCoach: () => setIsOpen(true) }}>
       <div className="app-shell">
-        <Sidebar onSearch={() => setCmdOpen(true)} />
+        <Sidebar onSearch={() => setCmdOpen(true)} userEmail={userEmail} />
 
         <main className="app-main">
           {/* Top bar */}

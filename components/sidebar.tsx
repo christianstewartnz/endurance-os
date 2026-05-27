@@ -11,6 +11,11 @@ interface NextRace {
   priority: 'A' | 'B' | 'C'
 }
 
+interface AthleteSummary {
+  name: string | null
+  sports: string[]
+}
+
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: 'layout-dashboard', kbd: '⌘1' },
   { path: '/calendar',  label: 'Calendar',  icon: 'calendar',         kbd: '⌘2' },
@@ -21,6 +26,21 @@ const NAV_ITEMS = [
 
 interface SidebarProps {
   onSearch?: () => void
+  userEmail?: string
+}
+
+function formatSportsSubtitle(sports: string[]): string {
+  if (!sports.length) return ''
+  const lower = sports.map((s) => s.toLowerCase())
+  const hasAll = ['cycling', 'running', 'swimming'].every((s) => lower.includes(s))
+  if (hasAll || lower.includes('triathlon')) return 'Triathlon'
+  return sports.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' · ')
+}
+
+function deriveAthleteDisplayName(name: string | null, email?: string): string {
+  if (name) return name
+  if (email) return email.split('@')[0]
+  return 'Athlete'
 }
 
 function parseDateLocal(s: string): Date {
@@ -38,11 +58,12 @@ function formatShortDate(dateStr: string): string {
   return parseDateLocal(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export default function Sidebar({ onSearch }: SidebarProps) {
+export default function Sidebar({ onSearch, userEmail }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [contextDot, setContextDot] = useState(false)
   const [nextRace, setNextRace] = useState<NextRace | null | undefined>(undefined)
+  const [athlete, setAthlete] = useState<AthleteSummary | null>(null)
 
   useEffect(() => {
     fetch('/api/context/suggestions/pending')
@@ -57,6 +78,20 @@ export default function Sidebar({ onSearch }: SidebarProps) {
       .then((d) => { setNextRace(d?.race ?? null) })
       .catch(() => { setNextRace(null) })
   }, [pathname])
+
+  useEffect(() => {
+    fetch('/api/context/athlete_profile')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d?.data) {
+          setAthlete({
+            name: d.data.name ?? null,
+            sports: Array.isArray(d.data.sports) ? d.data.sports : [],
+          })
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   return (
     <aside style={{
@@ -80,11 +115,13 @@ export default function Sidebar({ onSearch }: SidebarProps) {
         <img src="/assets/logo-mark.svg" width={22} height={22} alt="" />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)', letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            Mira Lindqvist
+            {deriveAthleteDisplayName(athlete?.name ?? null, userEmail)}
           </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-            Triathlon · M70.3
-          </div>
+          {athlete && athlete.sports.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+              {formatSportsSubtitle(athlete.sports)}
+            </div>
+          )}
         </div>
         <Icon name="chevrons-up-down" size={14} color="var(--fg-3)" />
       </div>

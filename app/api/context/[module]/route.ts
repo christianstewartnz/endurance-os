@@ -45,7 +45,7 @@ const ARRAY_FIELDS: Record<string, string[]> = {
 const JSONB_FIELDS: Record<string, string[]> = {
   health_injury:        ['active_injuries', 'illnesses'],
   plan_dna:             ['weekly_structure'],
-  athlete_profile:      ['zones_cycling', 'zones_running', 'zones_swimming'],
+  athlete_profile:      ['zones_cycling', 'zones_running', 'zones_swimming', 'pbs'],
   fueling_strategy:     [],
   recovery_preferences: [],
   coach_style:          [],
@@ -87,6 +87,33 @@ function coerceFields(module: string, raw: Record<string, unknown>): Record<stri
     }
   }
   return out
+}
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ module: string }> },
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { module } = await params
+  if (!ALLOWED_MODULES.includes(module)) {
+    return NextResponse.json({ error: 'Invalid module' }, { status: 400 })
+  }
+
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from(module)
+    .select('*')
+    .eq('user_id', user.id)
+    .maybeSingle()
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ data })
 }
 
 export async function PUT(

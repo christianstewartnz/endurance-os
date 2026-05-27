@@ -11,6 +11,16 @@ export interface IntervalWellness {
   bodyBattery: number
 }
 
+export interface IntervalAchievement {
+  type: string
+  watts?: number
+  secs?: number
+  value?: number
+  distance?: number
+  pace?: number
+  [key: string]: unknown
+}
+
 export interface IntervalActivity {
   id: string
   start_date_local: string
@@ -19,39 +29,36 @@ export interface IntervalActivity {
   moving_time: number
   elapsed_time: number
   // Power
-  average_watts: number
-  weighted_average_watts: number
-  max_watts: number
+  icu_average_watts: number
+  icu_weighted_avg_watts: number
+  p_max: number           // recorded max power
+  icu_joules: number      // total work in joules
   // HR
   average_heartrate: number
   max_heartrate: number
-  cardiac_drift_percent: number
   // ICU metrics
   icu_training_load: number
   icu_atl: number
   icu_ctl: number
-  icu_tsb: number
   icu_intensity: number
-  icu_variability: number
+  icu_variability_index: number
   icu_efficiency_factor: number
-  icu_aerobic_decoupling: number
-  icu_hrss: number
-  icu_zones: unknown[]
-  icu_gaps: unknown[]
+  decoupling: number      // aerobic decoupling
   // Movement
   distance: number
   total_elevation_gain: number
-  average_speed: number // m/s
-  max_speed: number // m/s
+  average_speed: number   // m/s
+  max_speed: number       // m/s
   average_cadence: number
   // Other
   calories: number
   average_temp: number
-  total_work: number // joules
   // Swimming
   pool_length?: number
   total_strokes?: number
   average_stroke_rate?: number
+  // Achievements / PBs flagged by Intervals.icu
+  icu_achievements?: IntervalAchievement[]
 }
 
 export interface IntervalActivityDetail {
@@ -62,24 +69,12 @@ export interface IntervalActivityDetail {
   // Interval/lap groups
   icu_groups?: unknown[]
   icu_intervals?: unknown[]
-  // Power
+  // Power (confirmed fields from API)
   icu_average_watts?: number
   icu_weighted_avg_watts?: number
-  max_watts?: number
-  total_work?: number
-  icu_20min_watts?: number
-  icu_60min_watts?: number
-  icu_5min_watts?: number
-  icu_1min_watts?: number
-  icu_5sec_watts?: number
-  // Running best paces (seconds/km)
-  icu_1km_pace?: number
-  icu_5km_pace?: number
-  icu_10km_pace?: number
-  icu_half_marathon_pace?: number
-  // Swimming best paces (seconds/100m)
-  icu_100m_pace?: number
-  icu_400m_pace?: number
+  p_max?: number          // recorded max instantaneous power
+  icu_joules?: number     // total work in joules
+  // Swimming
   avg_strokes_per_length?: number
   [key: string]: unknown
 }

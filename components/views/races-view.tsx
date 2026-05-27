@@ -830,7 +830,7 @@ function NotesTab({
             </span>
           </div>
           <div style={{ fontSize: 13, color: 'var(--fg-1)', marginBottom: 6, lineHeight: 1.5 }}>
-            "{s.suggested_value}"
+            &ldquo;{s.suggested_value}&rdquo;
           </div>
           {s.reasoning && (
             <div style={{ fontSize: 12, color: 'var(--fg-3)', marginBottom: 12 }}>
@@ -994,7 +994,7 @@ function SuggestionCard({
         />
       ) : (
         <div style={{ fontSize: 13, color: 'var(--fg-1)', marginBottom: 6, lineHeight: 1.5 }}>
-          "{suggestion.suggested_value}"
+          &ldquo;{suggestion.suggested_value}&rdquo;
         </div>
       )}
       {suggestion.reasoning && (

@@ -88,12 +88,75 @@ For all other context modules (Plan DNA, Training Patterns, Adaptation Rules, Ra
   return instructions
 }
 
+interface PBEntry { value: number | null; unit: string; date: string | null; source: string | null; override: number | null }
+type PBSport = Record<string, PBEntry>
+interface PBData { cycling?: PBSport; running?: PBSport; swimming?: PBSport }
+
+function fmtPBPace(secsPerUnit: number, suffix: string): string {
+  const m = Math.floor(secsPerUnit / 60)
+  const s = Math.round(secsPerUnit % 60)
+  return `${m}:${String(s).padStart(2, '0')}/${suffix}`
+}
+
+function buildPBsSection(pbs: PBData | null): string {
+  if (!pbs) return ''
+  const lines: string[] = []
+
+  const cycling = pbs.cycling
+  if (cycling) {
+    const parts: string[] = []
+    const powerFields: [string, string][] = [
+      ['power_5s', '5s'], ['power_1min', '1min'], ['power_5min', '5min'],
+      ['power_20min', '20min'], ['power_60min', '60min'],
+    ]
+    for (const [key, label] of powerFields) {
+      const e = cycling[key]
+      if (!e) continue
+      const v = e.override ?? e.value
+      if (v != null) parts.push(`${label} ${v}W`)
+    }
+    if (parts.length) lines.push(`  Cycling: ${parts.join(' · ')}`)
+  }
+
+  const running = pbs.running
+  if (running) {
+    const parts: string[] = []
+    const paceFields: [string, string][] = [
+      ['pace_1km', '1km'], ['pace_5km', '5km'], ['pace_10km', '10km'],
+      ['pace_half_marathon', 'Half'], ['pace_marathon', 'Marathon'],
+    ]
+    for (const [key, label] of paceFields) {
+      const e = running[key]
+      if (!e) continue
+      const v = e.override ?? e.value
+      if (v != null) parts.push(`${label} ${fmtPBPace(v, 'km')}`)
+    }
+    if (parts.length) lines.push(`  Running: ${parts.join(' · ')}`)
+  }
+
+  const swimming = pbs.swimming
+  if (swimming) {
+    const parts: string[] = []
+    for (const [key, label] of [['pace_100m', '100m'], ['pace_400m', '400m']] as [string, string][]) {
+      const e = swimming[key]
+      if (!e) continue
+      const v = e.override ?? e.value
+      if (v != null) parts.push(`${label} ${fmtPBPace(v, '100m')}`)
+    }
+    if (parts.length) lines.push(`  Swimming: ${parts.join(' · ')}`)
+  }
+
+  if (!lines.length) return ''
+  return `\n\nPersonal bests:\n${lines.join('\n')}`
+}
+
 function buildAthleteLayer(profile: Record<string, unknown> | null, effectiveFtp: number | null, effectivePace: number | null, effectiveCss: number | null): string {
   if (!profile) return ''
 
   const sports = Array.isArray(profile.sports) ? (profile.sports as string[]).join(', ') : (profile.sports ?? '—')
   const zones = profile.zones_cycling as { zones?: Array<{ name: string; min: number; max: number }> } | null
   const zonesRunning = profile.zones_running as { zones?: Array<{ name: string; min: number; max: number }> } | null
+  const pbs = profile.pbs as PBData | null
 
   let section = `════════════════════════════════════════
 ATHLETE PROFILE
@@ -119,6 +182,8 @@ Fitness metrics${profile.fitness_metrics_last_synced ? ` (sourced from Intervals
   if (zonesRunning?.zones?.length) {
     section += `\n\nRunning zones:\n  ${zonesRunning.zones.map((z) => `${z.name}: ${z.min}–${z.max}`).join(' · ')}`
   }
+
+  section += buildPBsSection(pbs)
 
   return section
 }

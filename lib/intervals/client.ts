@@ -92,6 +92,18 @@ export function createIntervalsClient(apiKey: string, athleteId: string) {
         externalIds
       )
     },
+
+    getPowerCurves(curves: string = 'all'): Promise<unknown> {
+      return get<unknown>(
+        `/api/v1/athlete/${athleteId}/power-curves?type=Ride&curves=${curves}`
+      )
+    },
+
+    getPaceCurves(curves: string = 'all'): Promise<unknown> {
+      return get<unknown>(
+        `/api/v1/athlete/${athleteId}/power-curves?type=Run&curves=${curves}`
+      )
+    },
   }
 }
 

@@ -226,6 +226,8 @@ export default function ContextView({
     if (active.id === 'athlete') {
       const d = active.data
       setEditFields({
+        name: fieldValueFromData(d, 'name'),
+        location: fieldValueFromData(d, 'location'),
         sports: fieldValueFromData(d, 'sports'),
         experience_years: fieldValueFromData(d, 'experience_years'),
         coaching_history: fieldValueFromData(d, 'coaching_history'),
@@ -308,6 +310,7 @@ export default function ContextView({
             onHealthFormChange={setHealthForm}
             onSave={handleSave}
             onClose={() => { setEditingId(null); setEditFields({}); setHealthForm(null); setSaveError(null) }}
+            onRefresh={() => router.refresh()}
             onMarkIllnessRecovered={handleMarkIllnessRecovered}
             onMarkInjuryResolved={handleMarkInjuryResolved}
           />
@@ -611,7 +614,7 @@ function AdaptationRulesPanel({ initialRules }: { initialRules: Row[] }) {
           <div style={{ fontSize: 12, color: 'var(--fg-4)', margin: '16px auto 0', maxWidth: 320, lineHeight: 1.6 }}>
             Example rules:<br />
             · If HRV drops 7%+ for 2 days → propose Z2 swap<br />
-            · If sleep &lt; 6h → downshift today's intensity<br />
+            · If sleep &lt; 6h → downshift today&apos;s intensity<br />
             · If T-7 days to A-race → no Z4+ work
           </div>
           <div style={{ marginTop: 16 }}>
@@ -699,15 +702,16 @@ interface ModuleDetailProps {
   onHealthFormChange: (s: HealthFormState) => void
   onSave: () => void
   onClose: () => void
+  onRefresh: () => void
   onMarkIllnessRecovered?: (id: string) => Promise<void>
   onMarkInjuryResolved?: (id: string) => Promise<void>
 }
 
-function ModuleDetail({ module, editing, editFields, healthForm, saving, saveError, raceGoals, onEdit, onFieldChange, onHealthFormChange, onSave, onClose, onMarkIllnessRecovered, onMarkInjuryResolved }: ModuleDetailProps) {
+function ModuleDetail({ module, editing, editFields, healthForm, saving, saveError, raceGoals, onEdit, onFieldChange, onHealthFormChange, onSave, onClose, onRefresh, onMarkIllnessRecovered, onMarkInjuryResolved }: ModuleDetailProps) {
 
   function renderContent() {
     if (module.id === 'athlete') {
-      return <AthleteProfileContent data={module.data} editing={editing} editFields={editFields} onFieldChange={onFieldChange} />
+      return <AthleteProfileContent data={module.data} editing={editing} editFields={editFields} onFieldChange={onFieldChange} onRefresh={onRefresh} />
     }
     if (module.id === 'health') {
       if (editing && healthForm) return <HealthModuleEdit healthForm={healthForm} onFormChange={onHealthFormChange} />
@@ -793,14 +797,305 @@ function ModuleDetail({ module, editing, editFields, healthForm, saving, saveErr
   )
 }
 
+// ── PB helpers ────────────────────────────────────────────────────────────────
+
+function fmtPace(secsPerKm: number | null, unit: string): string {
+  if (secsPerKm == null) return '—'
+  const m = Math.floor(secsPerKm / 60)
+  const s = Math.round(secsPerKm % 60)
+  return `${m}:${String(s).padStart(2, '0')}/${unit}`
+}
+
+function fmtPBDate(dateStr: string | null): string {
+  if (!dateStr) return ''
+  try {
+    const [y, mo, d] = dateStr.split('-').map(Number)
+    return new Date(y, mo - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return dateStr }
+}
+
+interface PBEntry { value: number | null; unit: string; date: string | null; source: string | null; override: number | null }
+type PBSport = Record<string, PBEntry>
+interface PBData { cycling?: PBSport; running?: PBSport; swimming?: PBSport }
+
+function PBRow({ label, entry, sport, metric, onOverride }: {
+  label: string
+  entry: PBEntry | undefined
+  sport: string
+  metric: string
+  onOverride: (sport: string, metric: string, entry: PBEntry | undefined) => void
+}) {
+  const effective = entry?.override != null ? entry.override : entry?.value
+  const isManual = entry?.override != null
+
+  let displayVal = '—'
+  if (effective != null) {
+    if (sport === 'cycling') {
+      displayVal = `${effective} W`
+    } else if (sport === 'running') {
+      displayVal = fmtPace(effective, 'km')
+    } else if (sport === 'swimming') {
+      displayVal = fmtPace(effective, '100m')
+    }
+  }
+
+  const [hovered, setHovered] = useState(false)
+
+  return (
+    <div
+      style={{ display: 'grid', gridTemplateColumns: '150px 1fr auto auto', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border-subtle)', alignItems: 'center' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', fontWeight: 500 }}>{label}</div>
+      <div style={{ fontSize: 13, color: effective == null ? 'var(--fg-4)' : 'var(--fg-1)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        {displayVal}
+        {isManual && (
+          <span style={{ fontSize: 10, color: 'var(--ai)', background: 'var(--ai-soft)', border: '1px solid var(--ai-edge)', padding: '1px 5px', borderRadius: 3 }}>manual</span>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+        {fmtPBDate(entry?.date ?? null)}
+      </div>
+      {hovered ? (
+        <button
+          onClick={() => onOverride(sport, metric, entry)}
+          title="Edit"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', color: 'var(--fg-3)', fontSize: 13, lineHeight: 1 }}
+        >
+          ✎
+        </button>
+      ) : (
+        <div style={{ width: 18 }} />
+      )}
+    </div>
+  )
+}
+
+interface OverrideState {
+  sport: string
+  metric: string
+  entry: PBEntry | undefined
+  wattsVal: string
+  minVal: string
+  secVal: string
+}
+
+const CYCLING_PB_ROWS: Array<[string, string]> = [
+  ['5 sec power',  'power_5s'],
+  ['1 min power',  'power_1min'],
+  ['5 min power',  'power_5min'],
+  ['20 min power', 'power_20min'],
+  ['60 min power', 'power_60min'],
+]
+const RUNNING_PB_ROWS: Array<[string, string]> = [
+  ['1 km',          'pace_1km'],
+  ['5 km',          'pace_5km'],
+  ['10 km',         'pace_10km'],
+  ['Half marathon', 'pace_half_marathon'],
+  ['Marathon',      'pace_marathon'],
+]
+const SWIMMING_PB_ROWS: Array<[string, string]> = [
+  ['100m', 'pace_100m'],
+  ['400m', 'pace_400m'],
+]
+
+function PersonalBestsSection({ data, onRefresh }: { data: Row | null; onRefresh: () => void }) {
+  const pbs = (data?.pbs ?? {}) as PBData
+  const sports = Array.isArray(data?.sports) ? (data.sports as string[]) : []
+
+  const defaultTab: 'cycling' | 'running' | 'swimming' =
+    sports.includes('cycling') ? 'cycling' :
+    sports.includes('running') ? 'running' : 'cycling'
+
+  const [activeTab, setActiveTab] = useState<'cycling' | 'running' | 'swimming'>(defaultTab)
+  const [override, setOverride] = useState<OverrideState | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveErr, setSaveErr] = useState<string | null>(null)
+
+  const cycling = pbs.cycling ?? {}
+  const running = pbs.running ?? {}
+  const swimming = pbs.swimming ?? {}
+
+  function startOverride(sport: string, metric: string, entry: PBEntry | undefined) {
+    if (sport === 'cycling') {
+      const v = entry?.override ?? entry?.value
+      setOverride({ sport, metric, entry, wattsVal: v != null ? String(v) : '', minVal: '', secVal: '' })
+    } else {
+      const v = entry?.override ?? entry?.value
+      if (v != null) {
+        const m = Math.floor(v / 60)
+        const s = Math.round(v % 60)
+        setOverride({ sport, metric, entry, wattsVal: '', minVal: String(m), secVal: String(s).padStart(2, '0') })
+      } else {
+        setOverride({ sport, metric, entry, wattsVal: '', minVal: '', secVal: '' })
+      }
+    }
+    setSaveErr(null)
+  }
+
+  async function handleSaveOverride() {
+    if (!override) return
+    setSaving(true); setSaveErr(null)
+    let val: number | null = null
+    if (override.sport === 'cycling') {
+      val = override.wattsVal.trim() === '' ? null : Number(override.wattsVal)
+    } else {
+      const m = parseInt(override.minVal || '0', 10)
+      const s = parseInt(override.secVal || '0', 10)
+      if (override.minVal.trim() === '' && override.secVal.trim() === '') {
+        val = null
+      } else {
+        val = m * 60 + s
+      }
+    }
+    try {
+      const res = await fetch('/api/athlete/pb-override', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sport: override.sport, metric: override.metric, value: val }),
+      })
+      if (res.ok) { setOverride(null); onRefresh() }
+      else { const b = await res.json().catch(() => ({})); setSaveErr(b.error ?? 'Save failed') }
+    } catch { setSaveErr('Network error') }
+    setSaving(false)
+  }
+
+  async function handleClearOverride() {
+    if (!override) return
+    setSaving(true); setSaveErr(null)
+    try {
+      const res = await fetch('/api/athlete/pb-override', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sport: override.sport, metric: override.metric, clear: true }),
+      })
+      if (res.ok) { setOverride(null); onRefresh() }
+      else { const b = await res.json().catch(() => ({})); setSaveErr(b.error ?? 'Clear failed') }
+    } catch { setSaveErr('Network error') }
+    setSaving(false)
+  }
+
+  const inputNumStyle: React.CSSProperties = {
+    background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 5,
+    padding: '6px 8px', color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 13, outline: 'none',
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border-default)', padding: '14px 24px' }}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)', marginBottom: 3 }}>PERSONAL BESTS</div>
+        <div style={{ fontSize: 11, color: 'var(--fg-4)', lineHeight: 1.4 }}>
+          Cycling and running PBs sync automatically from Intervals.icu · Swimming requires manual entry
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 2, marginBottom: 4, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 0 }}>
+        {([
+          { id: 'cycling',  label: 'Cycling',  manual: false },
+          { id: 'running',  label: 'Running',  manual: false },
+          { id: 'swimming', label: 'Swimming', manual: true  },
+        ] as const).map((tab) => (
+          <button key={tab.id}
+            onClick={() => { setActiveTab(tab.id); setOverride(null) }}
+            style={{
+              padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
+              background: 'transparent', border: 'none', borderBottom: `2px solid ${activeTab === tab.id ? 'var(--accent)' : 'transparent'}`,
+              color: activeTab === tab.id ? 'var(--fg-1)' : 'var(--fg-3)',
+              fontWeight: activeTab === tab.id ? 500 : 400,
+              marginBottom: -1, display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+            {tab.label}
+            {tab.manual && (
+              <span style={{ fontSize: 9, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>manual</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab rows */}
+      <div style={{ paddingTop: 4 }}>
+        {activeTab === 'cycling' && CYCLING_PB_ROWS.map(([label, key]) => (
+          <PBRow key={key} label={label} entry={cycling[key] as PBEntry | undefined}
+            sport="cycling" metric={key} onOverride={startOverride} />
+        ))}
+        {activeTab === 'running' && RUNNING_PB_ROWS.map(([label, key]) => (
+          <PBRow key={key} label={label} entry={running[key] as PBEntry | undefined}
+            sport="running" metric={key} onOverride={startOverride} />
+        ))}
+        {activeTab === 'swimming' && SWIMMING_PB_ROWS.map(([label, key]) => (
+          <PBRow key={key} label={label} entry={swimming[key] as PBEntry | undefined}
+            sport="swimming" metric={key} onOverride={startOverride} />
+        ))}
+      </div>
+
+      {/* Inline override form */}
+      {override && override.sport === activeTab && (
+        <div style={{ marginTop: 12, padding: '12px 14px', background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 7 }}>
+          <div style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>
+            Override <span style={{ color: 'var(--fg-1)' }}>{override.metric}</span>
+            {override.entry?.value != null && (
+              <span style={{ color: 'var(--fg-4)', marginLeft: 8 }}>
+                Auto: {override.sport === 'cycling' ? `${override.entry.value}W` : fmtPace(override.entry.value, override.sport === 'swimming' ? '100m' : 'km')}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {override.sport === 'cycling' ? (
+              <>
+                <input type="number" value={override.wattsVal}
+                  onChange={(e) => setOverride((o) => o ? { ...o, wattsVal: e.target.value } : o)}
+                  placeholder="watts"
+                  style={{ ...inputNumStyle, width: 80 }} />
+                <span style={{ color: 'var(--fg-3)', fontSize: 12 }}>W</span>
+              </>
+            ) : (
+              <>
+                <input type="number" min="0" max="99" value={override.minVal}
+                  onChange={(e) => setOverride((o) => o ? { ...o, minVal: e.target.value } : o)}
+                  placeholder="min"
+                  style={{ ...inputNumStyle, width: 52 }} />
+                <span style={{ color: 'var(--fg-3)', fontSize: 13 }}>:</span>
+                <input type="number" min="0" max="59" value={override.secVal}
+                  onChange={(e) => setOverride((o) => o ? { ...o, secVal: e.target.value } : o)}
+                  placeholder="sec"
+                  style={{ ...inputNumStyle, width: 52 }} />
+                <span style={{ color: 'var(--fg-3)', fontSize: 12 }}>{override.sport === 'swimming' ? '/100m' : '/km'}</span>
+              </>
+            )}
+            <button onClick={handleSaveOverride} disabled={saving}
+              style={{ background: 'var(--accent)', border: 'none', borderRadius: 5, padding: '6px 12px', fontSize: 12, fontWeight: 500, color: '#0a0a0a', cursor: 'pointer' }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            {override.entry?.override != null && (
+              <button onClick={handleClearOverride} disabled={saving}
+                style={{ background: 'none', border: '1px solid var(--border-default)', borderRadius: 5, padding: '6px 12px', fontSize: 12, color: 'var(--fg-3)', cursor: 'pointer' }}>
+                Clear
+              </button>
+            )}
+            <button onClick={() => setOverride(null)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-4)', fontSize: 13, padding: '6px 4px' }}>✕</button>
+          </div>
+          {saveErr && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>{saveErr}</div>}
+        </div>
+      )}
+
+      <div style={{ paddingBottom: 14 }} />
+    </div>
+  )
+}
+
 // ── Athlete Profile Content ───────────────────────────────────────────────────
 
-function AthleteProfileContent({ data, editing, editFields, onFieldChange }: {
-  data: Row | null; editing: boolean; editFields: Record<string, string>; onFieldChange: (k: string, v: string) => void
+function AthleteProfileContent({ data, editing, editFields, onFieldChange, onRefresh }: {
+  data: Row | null; editing: boolean; editFields: Record<string, string>; onFieldChange: (k: string, v: string) => void; onRefresh?: () => void
 }) {
   const inputStyle: React.CSSProperties = { background: 'var(--bg-1)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '7px 10px', color: 'var(--fg-1)', fontFamily: 'inherit', fontSize: 13, lineHeight: 1.5, outline: 'none', width: '100%', boxSizing: 'border-box' }
 
   const coachingFields: Array<[string, string]> = data ? [
+    ['Name', fmt(data.name)],
+    ['Location', fmt(data.location)],
     ['Sports', fmt(data.sports)],
     ['Experience', data.experience_years ? `${data.experience_years} years` : '—'],
     ['Coaching history', fmt(data.coaching_history)],
@@ -815,6 +1110,8 @@ function AthleteProfileContent({ data, editing, editFields, onFieldChange }: {
 
   if (editing) {
     const editDefs = [
+      { label: 'Name', key: 'name', placeholder: 'Your name' },
+      { label: 'Location', key: 'location', placeholder: 'City, Country' },
       { label: 'Sports', key: 'sports', hint: 'comma-separated' },
       { label: 'Experience years', key: 'experience_years', hint: 'number' },
       { label: 'Coaching history', key: 'coaching_history' },
@@ -835,6 +1132,7 @@ function AthleteProfileContent({ data, editing, editFields, onFieldChange }: {
               {def.hint && <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{def.hint}</div>}
             </div>
             <textarea value={editFields[def.key] ?? ''} onChange={(e) => onFieldChange(def.key, e.target.value)} rows={1}
+              placeholder={def.placeholder}
               style={{ ...inputStyle, resize: 'vertical' }} />
           </div>
         ))}
@@ -882,6 +1180,7 @@ function AthleteProfileContent({ data, editing, editFields, onFieldChange }: {
         ))}
         <div style={{ paddingBottom: 14 }} />
       </div>
+      <PersonalBestsSection data={data} onRefresh={onRefresh ?? (() => {})} />
     </div>
   )
 }
