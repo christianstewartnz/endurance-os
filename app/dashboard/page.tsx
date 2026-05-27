@@ -15,6 +15,12 @@ function daysAgoStr(n: number): string {
   return new Date(Date.now() - n * 86400000).toISOString().split('T')[0]
 }
 
+function shiftDateStr(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().split('T')[0]
+}
+
 function getCurrentWeekBounds(): { monday: string; sunday: string } {
   const now = new Date()
   const dayOfWeek = now.getDay() // 0=Sun, 1=Mon…
@@ -65,14 +71,18 @@ export default async function DashboardPage() {
 
   const wellnessToday = (wellness14d ?? []).find((w) => w.date === today) ?? null
 
-  // Fetch this week's completed sessions
+  // Fetch this week's completed sessions.
+  // Extend bounds by 1 day each side so UTC+12/+13 users (e.g. NZ) are covered
+  // even when their local "today" is a day ahead of UTC.
   const { monday, sunday } = getCurrentWeekBounds()
+  const sessionFrom = shiftDateStr(monday, -1)
+  const sessionTo   = shiftDateStr(sunday, 1)
   const { data: weekSessions } = await admin
     .from('session_notes')
     .select('*')
     .eq('user_id', user.id)
-    .gte('session_date', monday)
-    .lte('session_date', sunday)
+    .gte('session_date', sessionFrom)
+    .lte('session_date', sessionTo)
     .eq('is_archived', false)
     .order('session_date', { ascending: true })
 
@@ -90,7 +100,8 @@ export default async function DashboardPage() {
         userData.intervals_api_key as string,
         userData.intervals_athlete_id as string
       )
-      weekEvents = await client.getCalendarEvents(monday, sunday)
+      // Extend by 1 day each side to match session query range
+      weekEvents = await client.getCalendarEvents(sessionFrom, sessionTo)
     } catch {
       // Not fatal — WeekStrip renders with completed sessions only
     }
@@ -98,8 +109,17 @@ export default async function DashboardPage() {
 
   const hasIntervalsConnected = !!(userData?.intervals_api_key && userData?.intervals_athlete_id)
 
-  const todayEvent = weekEvents.find((e) => e.start_date_local.startsWith(today)) ?? null
-  const todaySession = ((weekSessions ?? []) as SessionNoteRow[]).find((s) => s.session_date === today) ?? null
+  // Fetch today + yesterday (UTC) so the client can filter to the user's local date.
+  // UTC+12/+13 users (e.g. NZ) may have a local date one ahead of UTC, so we
+  // pass both days and let the browser pick the right one.
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+  const { data: recentSessions } = await admin
+    .from('session_notes')
+    .select('*')
+    .eq('user_id', user.id)
+    .in('session_date', [today, yesterday])
+    .order('session_date', { ascending: false })
+    .limit(2)
 
   return (
     <AppShell>
@@ -109,8 +129,7 @@ export default async function DashboardPage() {
         weekSessions={(weekSessions ?? []) as SessionNoteRow[]}
         weekEvents={weekEvents}
         hasIntervalsConnected={hasIntervalsConnected}
-        todayEvent={todayEvent}
-        todaySession={todaySession}
+        recentSessions={(recentSessions ?? []) as SessionNoteRow[]}
       />
     </AppShell>
   )

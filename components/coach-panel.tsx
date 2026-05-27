@@ -109,6 +109,7 @@ export default function CoachPanel() {
     startNewConversation: contextStartNew,
     activeThread, setActiveThread,
     resumedConversation, setResumedConversation,
+    pendingRequest, setPendingRequest,
   } = useCoach()
 
   const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat')
@@ -154,6 +155,14 @@ export default function CoachPanel() {
   useEffect(() => {
     if (activeTab === 'history') loadHistory()
   }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-send pending session review request when panel mounts or request arrives
+  useEffect(() => {
+    if (!pendingRequest || isStreaming) return
+    const req = pendingRequest
+    setPendingRequest(null)
+    sendMessage(req.message, { contextType: req.contextType, sessionId: req.sessionId })
+  }, [pendingRequest]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ⌘⇧N — new conversation
   useEffect(() => {
@@ -286,7 +295,7 @@ export default function CoachPanel() {
     }
   }
 
-  const sendMessage = useCallback(async (text: string) => {
+  const sendMessage = useCallback(async (text: string, opts?: { contextType?: string; sessionId?: string }) => {
     if (!text.trim() || isStreaming) return
 
     const userMsgId = uid()
@@ -321,7 +330,8 @@ export default function CoachPanel() {
         body: JSON.stringify({
           messages: historyForApi,
           conversationId,
-          contextType: 'general',
+          contextType: opts?.contextType ?? 'general',
+          ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
         }),
         signal: abort.signal,
       })

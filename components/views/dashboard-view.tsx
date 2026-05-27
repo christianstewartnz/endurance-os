@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Icon, Button, Pill, Sparkline } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
+import { useCoach } from '@/lib/context/coach-context'
 import { SessionOverviewModal } from '@/components/views/calendar-view'
 import type { WellnessCacheRow, SessionNoteRow, IntervalEvent } from '@/lib/intervals/types'
 
@@ -15,8 +16,7 @@ interface DashboardProps {
   weekSessions: SessionNoteRow[]
   weekEvents: IntervalEvent[]
   hasIntervalsConnected: boolean
-  todayEvent?: IntervalEvent | null
-  todaySession?: SessionNoteRow | null
+  recentSessions: SessionNoteRow[]
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -62,11 +62,16 @@ export default function DashboardView({
   weekSessions,
   weekEvents,
   hasIntervalsConnected,
-  todayEvent,
-  todaySession,
+  recentSessions,
 }: DashboardProps) {
+  // Use browser local date (en-CA locale = YYYY-MM-DD) so UTC+12/+13 users
+  // get their correct local date rather than the server's UTC date.
+  const localToday = new Date().toLocaleDateString('en-CA')
+  const todaySession = recentSessions.find((s) => s.session_date === localToday) ?? null
+  const todayEvent   = weekEvents.find((e) => e.start_date_local.startsWith(localToday)) ?? null
   const router = useRouter()
   const { openCoach } = useCoachPanel()
+  const { startSessionReview } = useCoach()
   const [showSessionModal, setShowSessionModal] = useState(false)
   const [sessionCreated, setSessionCreated] = useState(false)
   const [overviewSession, setOverviewSession] = useState<SessionNoteRow | null>(null)
@@ -146,6 +151,7 @@ export default function DashboardView({
 
       <TodaysSessionCard
         onOpenCoach={openCoach}
+        onReviewWithCoach={startSessionReview}
         todayEvent={todayEvent}
         todaySession={todaySession}
         onCreateSession={() => setShowSessionModal(true)}
@@ -187,7 +193,7 @@ export default function DashboardView({
             onClose={closeSessionOverview}
             onReflectionChange={setReflectionText}
             onReflectionSave={saveReflection}
-            onCoachOpen={() => { closeSessionOverview(); openCoach() }}
+            onCoachOpen={() => { if (overviewSession) startSessionReview(overviewSession); closeSessionOverview() }}
           />
         </>
       )}
@@ -199,13 +205,14 @@ export default function DashboardView({
 
 interface TodaysSessionCardProps {
   onOpenCoach: () => void
+  onReviewWithCoach: (session: SessionNoteRow) => void
   todayEvent?: IntervalEvent | null
   todaySession?: SessionNoteRow | null
   onCreateSession: () => void
   sessionCreated: boolean
 }
 
-function TodaysSessionCard({ onOpenCoach, todayEvent, todaySession, onCreateSession, sessionCreated }: TodaysSessionCardProps) {
+function TodaysSessionCard({ onOpenCoach, onReviewWithCoach, todayEvent, todaySession, onCreateSession, sessionCreated }: TodaysSessionCardProps) {
   const [markingRest, setMarkingRest] = useState(false)
   const [markedRest, setMarkedRest] = useState(false)
 
@@ -305,7 +312,7 @@ function TodaysSessionCard({ onOpenCoach, todayEvent, todaySession, onCreateSess
             }
           </div>
         </div>
-        <Button kind="ai" size="md" icon="sparkles" onClick={onOpenCoach}>Review with Coach</Button>
+        <Button kind="ai" size="md" icon="sparkles" onClick={() => onReviewWithCoach(s)}>Review with Coach</Button>
       </div>
     )
   }
