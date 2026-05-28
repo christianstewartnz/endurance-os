@@ -43,6 +43,13 @@ export default async function DashboardPage() {
 
   const admin = createAdminClient()
   const today = todayStr()
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+  const oldest14d = daysAgoStr(13)
+  // Extend week bounds by 1 day each side so UTC+12/+13 users (e.g. NZ) are
+  // covered when their local "today" is a day ahead of UTC.
+  const { monday, sunday } = getCurrentWeekBounds()
+  const sessionFrom = shiftDateStr(monday, -1)
+  const sessionTo   = shiftDateStr(sunday, 1)
 
   // Check if today's wellness is already cached
   const { data: todayCheck } = await admin
@@ -52,76 +59,60 @@ export default async function DashboardPage() {
     .eq('date', today)
     .maybeSingle()
 
-  // Auto-sync wellness if we don't have today's record
   if (!todayCheck) {
-    try {
-      await syncWellness(user.id)
-    } catch {
-      // Non-fatal — dashboard renders empty state if no data
-    }
+    try { await syncWellness(user.id) } catch { /* non-fatal */ }
   }
 
-  // Fetch last 14 days of wellness for sparklines + today's record
-  const oldest14d = daysAgoStr(13)
-  const { data: wellness14d } = await admin
-    .from('wellness_cache')
-    .select('*')
-    .eq('user_id', user.id)
-    .gte('date', oldest14d)
-    .lte('date', today)
-    .order('date', { ascending: true })
+  // Fetch all dashboard data in parallel
+  const [wellness14dResult, weekSessionsResult, userDataResult, recentSessionsResult] = await Promise.all([
+    admin
+      .from('wellness_cache')
+      .select('*')
+      .eq('user_id', user.id)
+      .gte('date', oldest14d)
+      .lte('date', today)
+      .order('date', { ascending: true }),
+    admin
+      .from('session_notes')
+      .select('*')
+      .eq('user_id', user.id)
+      .gte('session_date', sessionFrom)
+      .lte('session_date', sessionTo)
+      .eq('is_archived', false)
+      .order('session_date', { ascending: true }),
+    admin
+      .from('users')
+      .select('intervals_api_key, intervals_athlete_id')
+      .eq('id', user.id)
+      .single(),
+    admin
+      .from('session_notes')
+      .select('*')
+      .eq('user_id', user.id)
+      .in('session_date', [today, yesterday])
+      .order('session_date', { ascending: false })
+      .limit(2),
+  ])
+
+  const wellness14d = wellness14dResult.data
+  const weekSessions = weekSessionsResult.data
+  const userData = userDataResult.data
+  const recentSessions = recentSessionsResult.data
 
   const wellnessToday = (wellness14d ?? []).find((w) => w.date === today) ?? null
+  const hasIntervalsConnected = !!(userData?.intervals_api_key && userData?.intervals_athlete_id)
 
-  // Fetch this week's completed sessions.
-  // Extend bounds by 1 day each side so UTC+12/+13 users (e.g. NZ) are covered
-  // even when their local "today" is a day ahead of UTC.
-  const { monday, sunday } = getCurrentWeekBounds()
-  const sessionFrom = shiftDateStr(monday, -1)
-  const sessionTo   = shiftDateStr(sunday, 1)
-  const { data: weekSessions } = await admin
-    .from('session_notes')
-    .select('*')
-    .eq('user_id', user.id)
-    .gte('session_date', sessionFrom)
-    .lte('session_date', sessionTo)
-    .eq('is_archived', false)
-    .order('session_date', { ascending: true })
-
-  // Fetch planned calendar events from Intervals.icu (live, server-side only)
+  // Fetch planned calendar events from Intervals.icu (depends on userData credentials)
   let weekEvents: IntervalEvent[] = []
-  const { data: userData } = await admin
-    .from('users')
-    .select('intervals_api_key, intervals_athlete_id')
-    .eq('id', user.id)
-    .single()
-
   if (userData?.intervals_api_key && userData?.intervals_athlete_id) {
     try {
       const client = createIntervalsClient(
         userData.intervals_api_key as string,
         userData.intervals_athlete_id as string
       )
-      // Extend by 1 day each side to match session query range
       weekEvents = await client.getCalendarEvents(sessionFrom, sessionTo)
-    } catch {
-      // Not fatal — WeekStrip renders with completed sessions only
-    }
+    } catch { /* not fatal — WeekStrip renders with completed sessions only */ }
   }
-
-  const hasIntervalsConnected = !!(userData?.intervals_api_key && userData?.intervals_athlete_id)
-
-  // Fetch today + yesterday (UTC) so the client can filter to the user's local date.
-  // UTC+12/+13 users (e.g. NZ) may have a local date one ahead of UTC, so we
-  // pass both days and let the browser pick the right one.
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
-  const { data: recentSessions } = await admin
-    .from('session_notes')
-    .select('*')
-    .eq('user_id', user.id)
-    .in('session_date', [today, yesterday])
-    .order('session_date', { ascending: false })
-    .limit(2)
 
   return (
     <AppShell>

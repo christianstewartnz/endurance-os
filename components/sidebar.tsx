@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Icon, Kbd } from '@/components/atoms'
 
@@ -153,9 +154,9 @@ export default function Sidebar({ onSearch, userEmail }: SidebarProps) {
         {NAV_ITEMS.map((item) => {
           const active = pathname === item.path
           return (
-            <div
+            <Link
               key={item.path}
-              onClick={() => router.push(item.path)}
+              href={item.path}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -163,6 +164,7 @@ export default function Sidebar({ onSearch, userEmail }: SidebarProps) {
                 padding: '0 10px',
                 height: 30,
                 borderRadius: 6,
+                textDecoration: 'none',
                 background: active ? 'var(--bg-3)' : 'transparent',
                 boxShadow: active ? 'inset 2px 0 0 var(--accent)' : 'none',
                 color: active ? 'var(--fg-1)' : 'var(--fg-2)',
@@ -171,8 +173,8 @@ export default function Sidebar({ onSearch, userEmail }: SidebarProps) {
                 cursor: 'pointer',
                 transition: 'background var(--dur-micro) var(--ease-out)',
               }}
-              onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-2)' }}
-              onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+              onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-2)' }}
+              onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLAnchorElement).style.background = 'transparent' }}
             >
               <Icon
                 name={item.icon}
@@ -186,7 +188,7 @@ export default function Sidebar({ onSearch, userEmail }: SidebarProps) {
               {active && (
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-3)' }}>{item.kbd}</span>
               )}
-            </div>
+            </Link>
           )
         })}
       </nav>

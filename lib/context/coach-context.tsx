@@ -1,8 +1,16 @@
 'use client'
 
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import type { SessionNoteRow } from '@/lib/intervals/types'
+
+export interface ContextTag {
+  tag: string
+  label: string
+  description: string
+  icon: string
+  group: 'context' | 'today' | 'sessions' | 'races'
+}
 
 export interface Message {
   id: string
@@ -40,6 +48,8 @@ interface CoachContextType {
   pendingRequest: PendingReviewRequest | null
   setPendingRequest: (r: PendingReviewRequest | null) => void
   startSessionReview: (session: SessionNoteRow) => void
+  hasApiKey: boolean | null
+  availableTags: ContextTag[]
 }
 
 function fmtDuration(secs: number | null): string {
@@ -59,6 +69,22 @@ export function CoachProvider({ children }: { children: React.ReactNode }) {
   const [activeThread, setActiveThread] = useState<string | null>(null)
   const [resumedConversation, setResumedConversation] = useState<ResumedConversation | null>(null)
   const [pendingRequest, setPendingRequest] = useState<PendingReviewRequest | null>(null)
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
+  const [availableTags, setAvailableTags] = useState<ContextTag[]>([])
+
+  useEffect(() => {
+    fetch('/api/keys/anthropic')
+      .then((r) => r.json())
+      .then((d) => setHasApiKey((d as { connected: boolean }).connected))
+      .catch(() => setHasApiKey(false))
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/coach/context-tags')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.tags) setAvailableTags(d.tags) })
+      .catch(() => {})
+  }, [])
 
   const startNewConversation = useCallback(() => {
     setMessages([])
@@ -90,6 +116,8 @@ export function CoachProvider({ children }: { children: React.ReactNode }) {
       resumedConversation, setResumedConversation,
       pendingRequest, setPendingRequest,
       startSessionReview,
+      hasApiKey,
+      availableTags,
     }}>
       {children}
     </CoachContext.Provider>

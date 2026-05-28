@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Icon, Button, Kbd } from '@/components/atoms'
 import { useRouter } from 'next/navigation'
 import { useCoach } from '@/lib/context/coach-context'
-import type { Message, ResumedConversation } from '@/lib/context/coach-context'
+import type { Message, ResumedConversation, ContextTag } from '@/lib/context/coach-context'
 
 interface ContextSuggestion {
   id: string
@@ -31,14 +31,6 @@ interface Conversation {
   message_count: number
   created_at: string
   updated_at: string
-}
-
-interface ContextTag {
-  tag: string
-  label: string
-  description: string
-  icon: string
-  group: 'context' | 'today' | 'sessions' | 'races'
 }
 
 function uid(): string {
@@ -110,17 +102,17 @@ export default function CoachPanel() {
     activeThread, setActiveThread,
     resumedConversation, setResumedConversation,
     pendingRequest, setPendingRequest,
+    hasApiKey,
+    availableTags,
   } = useCoach()
 
   const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat')
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [availableTags, setAvailableTags] = useState<ContextTag[]>([])
   const [showTagDropdown, setShowTagDropdown] = useState(false)
   const [tagQuery, setTagQuery] = useState('')
   const [tagDropdownIndex, setTagDropdownIndex] = useState(0)
@@ -128,23 +120,6 @@ export default function CoachPanel() {
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const tagAnchorRef = useRef<number>(0)
-
-  useEffect(() => {
-    fetch('/api/keys/anthropic')
-      .then((r) => r.json())
-      .then((d) => {
-        setHasApiKey((d as { connected: boolean }).connected)
-      })
-      .catch(() => setHasApiKey(false))
-  }, [])
-
-  // Fetch available @ tags on mount
-  useEffect(() => {
-    fetch('/api/coach/context-tags')
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => { if (d?.tags) setAvailableTags(d.tags) })
-      .catch(() => {})
-  }, [])
 
   useEffect(() => {
     if (scrollRef.current) {
