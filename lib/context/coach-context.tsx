@@ -17,6 +17,7 @@ export interface Message {
   role: 'system' | 'ai' | 'user'
   content: string
   modulesRead?: string[]
+  proposal?: import('@/lib/hooks/use-coach-chat').ProposeSessionInput
 }
 
 export interface ResumedConversation {

@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Icon, Button, Kbd } from '@/components/atoms'
 import { useRouter } from 'next/navigation'
 import { useCoach } from '@/lib/context/coach-context'
+import { useCoachChat } from '@/lib/hooks/use-coach-chat'
+import { SessionProposalCard } from '@/components/session-proposal-card'
 import type { Message, ResumedConversation, ContextTag } from '@/lib/context/coach-context'
 
 interface ContextSuggestion {
@@ -106,10 +108,12 @@ export default function CoachPanel() {
     availableTags,
   } = useCoach()
 
+  const { streamChat, isStreaming, abort } = useCoachChat()
   const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat')
   const [input, setInput] = useState('')
-  const [isStreaming, setIsStreaming] = useState(false)
   const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
+  const [addedSessionMsgIds, setAddedSessionMsgIds] = useState<Set<string>>(new Set())
+  const [addingSessionMsgId, setAddingSessionMsgId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -117,7 +121,6 @@ export default function CoachPanel() {
   const [tagQuery, setTagQuery] = useState('')
   const [tagDropdownIndex, setTagDropdownIndex] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const tagAnchorRef = useRef<number>(0)
 
@@ -165,9 +168,10 @@ export default function CoachPanel() {
   }, [])
 
   function handleNewConversation() {
-    if (abortRef.current) abortRef.current.abort()
+    abort()
     contextStartNew()
     setInlineCards([])
+    setAddedSessionMsgIds(new Set())
     setInput('')
     setActiveTab('chat')
   }
@@ -282,140 +286,64 @@ export default function CoachPanel() {
       { id: aiMsgId, role: 'ai', content: '' },
     ])
     setInput('')
-    setIsStreaming(true)
 
-    // Set title from first user message if not set
     if (!conversationTitle) {
       const words = text.trim().split(/\s+/)
       setConversationTitle(words.length > 6 ? words.slice(0, 6).join(' ') + '…' : text.trim())
     }
 
-    const historyForApi = messages
+    const historyForApi: Array<{ role: 'user' | 'assistant'; content: string }> = messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user', content: m.content }))
+      .map((m) => ({ role: (m.role === 'ai' ? 'assistant' : 'user') as 'user' | 'assistant', content: m.content }))
     historyForApi.push({ role: 'user', content: text })
 
-    const abort = new AbortController()
-    abortRef.current = abort
+    await streamChat(
+      historyForApi,
+      { conversationId, contextType: opts?.contextType ?? 'general', sessionId: opts?.sessionId },
+      {
+        onTextDelta: (delta) => {
+          setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: m.content + delta } : m))
+        },
+        onComplete: async ({ fullText, modulesLoaded, newSuggestionIds, proposedSession }) => {
+          setMessages((prev) => prev.map((m) => m.id === aiMsgId
+            ? { ...m, content: fullText, modulesRead: modulesLoaded, ...(proposedSession ? { proposal: proposedSession } : {}) }
+            : m
+          ))
 
-    try {
-      const res = await fetch('/api/coach/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: historyForApi,
-          conversationId,
-          contextType: opts?.contextType ?? 'general',
-          ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
-        }),
-        signal: abort.signal,
-      })
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({})) as { error?: string }
-        const errMsg = (() => {
-          switch (errData?.error) {
-            case 'no_api_key': return 'No API key connected. Please add your Anthropic key in Settings.'
-            case 'invalid_api_key': return 'API key is invalid. Please update it in Settings → API Keys.'
-            case 'rate_limited': return 'Too many requests — please wait a moment and try again.'
-            case 'network_error': return 'Could not reach Anthropic. Check your connection.'
-            default: return 'Something went wrong. Please try again.'
-          }
-        })()
-        setMessages((prev) =>
-          prev.map((m) => m.id === aiMsgId ? { ...m, content: errMsg } : m)
-        )
-        setIsStreaming(false)
-        return
-      }
-
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let fullText = ''
-      let buffer = ''
-      let enduranceMeta: { modulesLoaded: string[]; newSuggestionIds: string[] } | null = null
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const data = line.slice(6)
-          if (data === '[DONE]') continue
-          try {
-            const parsed = JSON.parse(data) as {
-              type?: string
-              delta?: { type?: string; text?: string }
-              modulesLoaded?: string[]
-              newSuggestionIds?: string[]
-            }
-            if (parsed.type === 'endurance_meta') {
-              enduranceMeta = {
-                modulesLoaded: parsed.modulesLoaded ?? [],
-                newSuggestionIds: parsed.newSuggestionIds ?? [],
+          if (newSuggestionIds.length > 0) {
+            try {
+              const pendingRes = await fetch('/api/context/suggestions/pending')
+              const { suggestions } = await pendingRes.json() as {
+                suggestions: Array<ContextSuggestion & { id: string }>
               }
-            } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-              fullText += parsed.delta.text ?? ''
-              setMessages((prev) =>
-                prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText } : m)
+              const forThisMessage = (suggestions ?? []).filter(
+                (s) => newSuggestionIds.includes(s.id)
               )
-            }
-          } catch {
-            // skip
+              if (forThisMessage.length > 0) {
+                setInlineCards((prev) => {
+                  const existingIds = new Set(prev.map((c) => c.suggestion.id))
+                  const trulyNew = forThisMessage.filter((s) => !existingIds.has(s.id))
+                  if (!trulyNew.length) return prev
+                  return [
+                    ...prev,
+                    ...trulyNew.map((s) => ({
+                      messageId: aiMsgId,
+                      suggestion: s,
+                      state: 'pending' as const,
+                      editValue: s.suggested_value,
+                    })),
+                  ]
+                })
+              }
+            } catch { /* skip */ }
           }
-        }
-      }
-
-      const modulesRead = enduranceMeta?.modulesLoaded ?? []
-      setMessages((prev) =>
-        prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText, modulesRead } : m)
-      )
-
-      // Show inline suggestion cards for review-required proposals
-      if (enduranceMeta && enduranceMeta.newSuggestionIds.length > 0) {
-        try {
-          const pendingRes = await fetch('/api/context/suggestions/pending')
-          const { suggestions } = await pendingRes.json() as {
-            suggestions: Array<ContextSuggestion & { id: string }>
-          }
-          const forThisMessage = (suggestions ?? []).filter(
-            (s) => enduranceMeta!.newSuggestionIds.includes(s.id)
-          )
-          if (forThisMessage.length > 0) {
-            setInlineCards((prev) => {
-              const existingIds = new Set(prev.map((c) => c.suggestion.id))
-              const trulyNew = forThisMessage.filter((s) => !existingIds.has(s.id))
-              if (!trulyNew.length) return prev
-              return [
-                ...prev,
-                ...trulyNew.map((s) => ({
-                  messageId: aiMsgId,
-                  suggestion: s,
-                  state: 'pending' as const,
-                  editValue: s.suggested_value,
-                })),
-              ]
-            })
-          }
-        } catch {
-          // skip
-        }
-      }
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return
-      setMessages((prev) =>
-        prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Connection error. Please retry.' } : m)
-      )
-    } finally {
-      setIsStreaming(false)
-      abortRef.current = null
-    }
-  }, [messages, isStreaming, conversationId, conversationTitle, setMessages, setConversationTitle])
+        },
+        onError: (msg) => {
+          setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: msg } : m))
+        },
+      },
+    )
+  }, [messages, isStreaming, conversationId, conversationTitle, setMessages, setConversationTitle, streamChat])
 
   async function handleSuggestionAction(cardIdx: number, action: 'accept' | 'reject' | 'edit', editedValue?: string) {
     const card = inlineCards[cardIdx]
@@ -590,6 +518,26 @@ export default function CoachPanel() {
                     />
                   ))
                 }
+                {m.proposal && !addedSessionMsgIds.has(m.id) && (
+                  <SessionProposalCard
+                    proposal={m.proposal}
+                    adding={addingSessionMsgId === m.id}
+                    onAdd={async (date) => {
+                      setAddingSessionMsgId(m.id)
+                      try {
+                        await fetch('/api/coach/sessions', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ proposal: m.proposal, date }),
+                        })
+                        setAddedSessionMsgIds((prev) => new Set([...prev, m.id]))
+                      } catch { /* non-fatal */ } finally {
+                        setAddingSessionMsgId(null)
+                      }
+                    }}
+                    onDecline={() => setAddedSessionMsgIds((prev) => new Set([...prev, m.id]))}
+                  />
+                )}
               </div>
             ))}
             {isStreaming && messages[messages.length - 1]?.content === '' && <TypingDots />}

@@ -5,8 +5,11 @@ import { useRouter } from 'next/navigation'
 import { Icon, Button, Pill, Sparkline } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
 import { useCoach } from '@/lib/context/coach-context'
+import { useCoachChat } from '@/lib/hooks/use-coach-chat'
+import { SessionProposalCard } from '@/components/session-proposal-card'
 import { SessionOverviewModal } from '@/components/views/calendar-view'
 import type { WellnessCacheRow, SessionNoteRow, IntervalEvent } from '@/lib/intervals/types'
+import type { ProposeSessionInput } from '@/lib/hooks/use-coach-chat'
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -380,16 +383,6 @@ function TodaysSessionCard({ onOpenCoach, onReviewWithCoach, todayEvent, todaySe
 
 // ── SessionCreationModal ─────────────────────────────────────────────────────
 
-interface SessionProposal {
-  name: string
-  type: string
-  sport: string
-  description: string
-  duration_seconds: number
-  estimated_tss: number
-  intervals_format: string
-}
-
 interface SessionCreationModalProps {
   onClose: () => void
   onSessionAdded: () => void
@@ -410,13 +403,13 @@ interface ModalMessage {
   id: string
   role: 'user' | 'ai'
   content: string
-  proposal?: SessionProposal
+  proposal?: ProposeSessionInput
 }
 
 function SessionCreationModal({ onClose, onSessionAdded }: SessionCreationModalProps) {
+  const { streamChat, isStreaming } = useCoachChat()
   const [messages, setMessages] = useState<ModalMessage[]>([])
   const [input, setInput] = useState('')
-  const [isStreaming, setIsStreaming] = useState(false)
   const [addingSession, setAddingSession] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -440,80 +433,34 @@ function SessionCreationModal({ onClose, onSessionAdded }: SessionCreationModalP
       { id: aiMsgId, role: 'ai', content: '' },
     ])
     setInput('')
-    setIsStreaming(true)
 
-    const history = messages
-      .map((m) => ({ role: m.role === 'ai' ? 'assistant' : 'user' as 'user' | 'assistant', content: m.content }))
+    const history: Array<{ role: 'user' | 'assistant'; content: string }> = messages
+      .map((m) => ({ role: (m.role === 'ai' ? 'assistant' : 'user') as 'user' | 'assistant', content: m.content }))
     history.push({ role: 'user', content: text })
 
-    try {
-      const res = await fetch('/api/coach/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, contextType: 'session_creation' }),
-      })
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({})) as { error?: string }
-        const msg = errData.error === 'no_api_key'
-          ? 'Connect your Anthropic API key in Settings to activate the Coach.'
-          : 'Something went wrong. Please try again.'
+    await streamChat(history, { contextType: 'session_creation' }, {
+      onTextDelta: (delta) => {
+        setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: m.content + delta } : m))
+      },
+      onComplete: ({ fullText, proposedSession }) => {
+        setMessages((prev) => prev.map((m) => m.id === aiMsgId
+          ? { ...m, content: fullText, ...(proposedSession ? { proposal: proposedSession } : {}) }
+          : m
+        ))
+      },
+      onError: (msg) => {
         setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: msg } : m))
-        setIsStreaming(false)
-        return
-      }
+      },
+    })
+  }, [messages, isStreaming, streamChat])
 
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let fullText = ''
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const data = line.slice(6)
-          if (data === '[DONE]') continue
-          try {
-            const parsed = JSON.parse(data) as { type?: string; delta?: { type?: string; text?: string } }
-            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-              fullText += parsed.delta.text ?? ''
-              setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText } : m))
-            }
-          } catch { /* skip */ }
-        }
-      }
-
-      // Extract session_proposal JSON from response
-      const proposalMatch = fullText.match(/\{"session_proposal":\s*\{[\s\S]*?\}\s*\}/)
-      let proposal: SessionProposal | undefined
-      if (proposalMatch) {
-        try {
-          const parsed = JSON.parse(proposalMatch[0]) as { session_proposal: SessionProposal }
-          proposal = parsed.session_proposal
-          const displayText = fullText.replace(proposalMatch[0], '').trim()
-          setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText, proposal } : m))
-        } catch { /* skip */ }
-      }
-    } catch {
-      setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Connection error. Please retry.' } : m))
-    } finally {
-      setIsStreaming(false)
-    }
-  }, [messages, isStreaming])
-
-  async function handleAddToToday(proposal: SessionProposal) {
+  async function handleAddSession(proposal: ProposeSessionInput, date: string) {
     setAddingSession(true)
     try {
-      const today = new Date().toISOString().split('T')[0]
       await fetch('/api/coach/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ proposal, date: today }),
+        body: JSON.stringify({ proposal, date }),
       })
       onSessionAdded()
     } catch {
@@ -604,13 +551,13 @@ function SessionCreationModal({ onClose, onSessionAdded }: SessionCreationModalP
                     ) : (
                       <>
                         <div style={{ background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-                          {(() => { const idx = m.content.indexOf('{"session_proposal"'); return idx >= 0 ? m.content.slice(0, idx).trim() : m.content })()}
+                          {m.content}
                           {isStreaming && i === messages.length - 1 && <span style={{ opacity: 0.5 }}>▊</span>}
                         </div>
                         {m.proposal && (
                           <SessionProposalCard
                             proposal={m.proposal}
-                            onAdd={() => handleAddToToday(m.proposal!)}
+                            onAdd={(date) => handleAddSession(m.proposal!, date)}
                             onDecline={() => setMessages((prev) => prev.map((msg) => msg.id === m.id ? { ...msg, proposal: undefined } : msg))}
                             adding={addingSession}
                           />
@@ -654,44 +601,6 @@ function SessionCreationModal({ onClose, onSessionAdded }: SessionCreationModalP
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function SessionProposalCard({ proposal, onAdd, onDecline, adding }: {
-  proposal: SessionProposal
-  onAdd: () => void
-  onDecline: () => void
-  adding: boolean
-}) {
-  const dur = proposal.duration_seconds
-    ? (() => {
-        const h = Math.floor(proposal.duration_seconds / 3600)
-        const m = Math.floor((proposal.duration_seconds % 3600) / 60)
-        return h > 0 ? `~${h}h ${m}min` : `~${m}min`
-      })()
-    : '—'
-
-  return (
-    <div style={{ marginTop: 10, border: '1px solid var(--border-default)', background: 'var(--bg-2)', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
-        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 6 }}>Session Proposal</div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 4 }}>{proposal.name}</div>
-        <div style={{ fontSize: 12, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
-          {proposal.sport} · {dur}{proposal.estimated_tss ? ` · Est. TSS ${proposal.estimated_tss}` : ''}
-        </div>
-      </div>
-      {proposal.description && (
-        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-          {proposal.description}
-        </div>
-      )}
-      <div style={{ padding: '12px 16px', display: 'flex', gap: 8 }}>
-        <Button kind="ai" size="sm" icon="check" onClick={onAdd}>
-          {adding ? 'Adding…' : '✓ Add to today'}
-        </Button>
-        <Button kind="ghost" size="sm" icon="x" onClick={onDecline}>Decline</Button>
       </div>
     </div>
   )

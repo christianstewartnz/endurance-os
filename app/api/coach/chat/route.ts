@@ -11,7 +11,37 @@ function isValidUUID(str: string | undefined): str is string {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str)
 }
 
-// ── Tool schema ──────────────────────────────────────────────────────────────
+// ── Tool schemas ─────────────────────────────────────────────────────────────
+
+interface ProposeSessionInput {
+  name: string
+  type: string
+  sport: string
+  date: string
+  description?: string
+  duration_seconds: number
+  estimated_tss: number
+  intervals_format: string
+}
+
+const PROPOSE_SESSION_TOOL = {
+  name: 'propose_session',
+  description: 'Propose a specific training session to add to the athlete\'s calendar. Only call this once you and the athlete have explicitly agreed on the session — not while still discussing options. The athlete confirms before anything is written; calling this tool does not write to the calendar by itself.',
+  input_schema: {
+    type: 'object',
+    required: ['name', 'type', 'sport', 'date', 'duration_seconds', 'estimated_tss', 'intervals_format'],
+    properties: {
+      name: { type: 'string', description: 'Short session title, e.g. \'6x4min VO2max\'' },
+      type: { type: 'string', description: 'Intervals.icu event type string, e.g. \'Ride\', \'Run\'' },
+      sport: { type: 'string', enum: ['cycling', 'running', 'swimming', 'strength', 'general'] },
+      date: { type: 'string', description: 'ISO date (YYYY-MM-DD) the session is planned for. Use the date actually discussed with the athlete — do not assume today.' },
+      description: { type: 'string', description: 'Plain-language session description for the athlete' },
+      duration_seconds: { type: 'integer' },
+      estimated_tss: { type: 'number' },
+      intervals_format: { type: 'string', description: 'Structured workout text in Intervals.icu workout description format' },
+    },
+  },
+}
 
 const PROPOSE_CONTEXT_UPDATE_TOOL = {
   name: 'propose_context_update',
@@ -79,22 +109,9 @@ const SESSION_CREATION_OVERLAY = `
 SESSION CREATION MODE
 ════════════════════════════════════════
 
-The athlete wants to create a training session. Help them build a session that fits their training context. Consider today's readiness, their current phase, and any adaptation rules before recommending intensity.
+Help the athlete design a training session that fits their current context. Consider today's readiness, their current training phase, and any applicable adaptation rules before recommending intensity or volume.
 
-When you have enough information, present the session in this exact JSON format at the end of your message:
-{
-  "session_proposal": {
-    "name": "string — session name",
-    "type": "Ride | Run | Swim | WeightTraining",
-    "sport": "cycling | running | swimming | strength",
-    "description": "string — Intervals.icu workout format",
-    "duration_seconds": 0,
-    "estimated_tss": 0,
-    "intervals_format": "string — same as description"
-  }
-}
-
-Always explain your reasoning before presenting the proposal. Wait for acceptance before writing to the calendar.
+When you and the athlete have agreed on a specific session — its type, structure, and date — call the propose_session tool. Use the date explicitly discussed; do not assume today. The athlete must confirm before anything is saved to their calendar.
 `
 
 const INJURY_OVERLAY = `
@@ -210,7 +227,7 @@ Your task for this review:
     max_tokens: maxTokens,
     stream: true,
     system: systemPrompt,
-    tools: [PROPOSE_CONTEXT_UPDATE_TOOL],
+    tools: [PROPOSE_CONTEXT_UPDATE_TOOL, PROPOSE_SESSION_TOOL],
     messages,
   }
 
@@ -250,6 +267,7 @@ Your task for this review:
   // { index → { id, name, partialJson } }
   const toolBlocks: Record<number, { id: string; name: string; partialJson: string }> = {}
   const completedToolCalls: ProposeContextUpdateInput[] = []
+  let proposedSession: ProposeSessionInput | null = null
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -294,12 +312,20 @@ Your task for this review:
                 }
               } else if (parsed.type === 'content_block_stop' && parsed.index != null) {
                 const block = toolBlocks[parsed.index]
-                if (block && block.name === 'propose_context_update' && block.partialJson) {
-                  try {
-                    const input = JSON.parse(block.partialJson) as ProposeContextUpdateInput
-                    completedToolCalls.push(input)
-                  } catch {
-                    console.error('[chat] failed to parse tool input:', block.partialJson)
+                if (block && block.partialJson) {
+                  if (block.name === 'propose_context_update') {
+                    try {
+                      const input = JSON.parse(block.partialJson) as ProposeContextUpdateInput
+                      completedToolCalls.push(input)
+                    } catch {
+                      console.error('[chat] failed to parse propose_context_update input:', block.partialJson)
+                    }
+                  } else if (block.name === 'propose_session') {
+                    try {
+                      proposedSession = JSON.parse(block.partialJson) as ProposeSessionInput
+                    } catch {
+                      console.error('[chat] failed to parse propose_session input:', block.partialJson)
+                    }
                   }
                 }
               }
@@ -510,6 +536,7 @@ Your task for this review:
         modulesLoaded,
         newSuggestionIds,
         autoApplied,
+        ...(proposedSession ? { proposedSession } : {}),
       })}\n\n`
       controller.enqueue(new TextEncoder().encode(metaEvent))
       controller.close()
