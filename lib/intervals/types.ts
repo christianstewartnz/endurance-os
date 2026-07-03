@@ -53,6 +53,14 @@ export interface IntervalActivity {
   // Other
   calories: number
   average_temp: number
+  // Zone distribution (also present on list endpoint, not just detail)
+  icu_zone_times?: { id: string; secs: number }[] | null
+  icu_hr_zone_times?: number[] | null
+  // Zone boundary definitions — icu_power_zones is in % of FTP (e.g. [55,75,90,105,120,150])
+  icu_hr_zones?: number[] | null
+  icu_power_zones?: number[] | null
+  // FTP used for this activity's power analysis
+  icu_ftp?: number | null
   // Swimming
   pool_length?: number
   total_strokes?: number
@@ -63,19 +71,19 @@ export interface IntervalActivity {
 
 export interface IntervalActivityDetail {
   id: string
-  // Zone distribution (time in each zone)
-  icu_zone_times?: { id: string; secs: number }[]   // power zones
-  icu_hr_zone_times?: number[]                       // HR zones as flat array
+  // Zone distribution — present on both list and detail endpoint, null when no data
+  icu_zone_times?: { id: string; secs: number }[] | null
+  icu_hr_zone_times?: number[] | null
   // Interval/lap groups
-  icu_groups?: unknown[]
-  icu_intervals?: unknown[]
-  // Power (confirmed fields from API)
-  icu_average_watts?: number
-  icu_weighted_avg_watts?: number
-  p_max?: number          // recorded max instantaneous power
-  icu_joules?: number     // total work in joules
+  icu_groups?: unknown[] | null
+  icu_intervals?: unknown[] | null
+  // Power — field names confirmed from API responses
+  icu_average_watts?: number | null
+  icu_weighted_avg_watts?: number | null
+  p_max?: number | null
+  icu_joules?: number | null
   // Swimming
-  avg_strokes_per_length?: number
+  avg_strokes_per_length?: number | null
   [key: string]: unknown
 }
 
@@ -146,7 +154,6 @@ export interface SessionNoteRow {
   variability_index: number | null
   efficiency_factor: number | null
   aerobic_decoupling: number | null
-  hrss: number | null
   // Movement
   distance_meters: number | null
   elevation_gain_meters: number | null

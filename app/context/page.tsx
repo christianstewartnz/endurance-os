@@ -22,6 +22,8 @@ export default async function ContextPage() {
     racesRes,
     fuelingRes,
     healthRes,
+    illnessesRes,
+    injuriesRes,
     recoveryRes,
     suggestionsRes,
   ] = await Promise.all([
@@ -32,7 +34,9 @@ export default async function ContextPage() {
     admin.from('adaptation_rules').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
     admin.from('race_goals').select('*').eq('user_id', user.id).eq('status', 'upcoming').order('race_date', { ascending: true }),
     admin.from('fueling_strategy').select('*').eq('user_id', user.id).maybeSingle(),
-    admin.from('health_injury').select('*').eq('user_id', user.id).maybeSingle(),
+    admin.from('health_injury').select('monitoring_flags, allergies, medications').eq('user_id', user.id).maybeSingle(),
+    admin.from('illnesses').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+    admin.from('injuries').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
     admin.from('recovery_preferences').select('*').eq('user_id', user.id).maybeSingle(),
     admin.from('context_suggestions').select('*').eq('user_id', user.id).eq('status', 'pending').order('created_at', { ascending: false }),
   ])
@@ -73,6 +77,8 @@ export default async function ContextPage() {
         raceGoals={racesRes.data ?? []}
         fuelingStrategy={fuelingRes.data}
         healthInjury={healthRes.data}
+        illnesses={illnessesRes.data ?? []}
+        injuries={injuriesRes.data ?? []}
         recoveryPreferences={recoveryRes.data}
         pendingSuggestions={suggestionsRes.data ?? []}
       />

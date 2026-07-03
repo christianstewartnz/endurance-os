@@ -34,7 +34,7 @@ export async function initUser(
       .upsert({ user_id: userId }, { onConflict: 'user_id' }),
 
     supabase.from('health_injury').upsert(
-      { user_id: userId, active_injuries: [] },
+      { user_id: userId },
       { onConflict: 'user_id' }
     ),
 

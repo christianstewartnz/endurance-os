@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 
-const MODEL = 'claude-sonnet-4-20250514'
+const MODEL = 'claude-sonnet-4-6'
 
 function extractKeyDecisions(messages: Array<{ role: string; content: string }>): string[] {
   const agreementWords = /\b(agreed|decided|will do|locked in|going with|confirmed)\b/i

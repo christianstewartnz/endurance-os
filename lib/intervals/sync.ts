@@ -49,10 +49,23 @@ function calcHrvDeltaPercent(records: IntervalWellness[], index: number): number
 
 function mapActivityType(intervalsType: string): string {
   const map: Record<string, string> = {
-    Ride: 'cycling',
-    Run: 'running',
-    Swim: 'swimming',
-    WeightTraining: 'strength',
+    // Cycling
+    Ride:              'cycling',
+    VirtualRide:       'cycling',   // Zwift, TrainerRoad smart trainer
+    EBikeRide:         'cycling',
+    MountainBikeRide:  'cycling',
+    GravelRide:        'cycling',
+    Handcycle:         'cycling',
+    // Running
+    Run:               'running',
+    VirtualRun:        'running',   // Zwift Run / virtual treadmill
+    Walk:              'running',
+    Treadmill:         'running',
+    // Swimming
+    Swim:              'swimming',
+    // Strength
+    WeightTraining:    'strength',
+    Crossfit:          'strength',
   }
   return map[intervalsType] ?? 'general'
 }
@@ -165,7 +178,6 @@ export async function syncActivities(userId: string): Promise<void> {
   }
 
   console.log('[intervals] Activities returned from API:', activities.length)
-  console.log('[intervals] Activity dates:', activities.map(a => a.start_date_local.split('T')[0]))
 
   const activityIds = activities.map((a) => String(a.id))
   console.log(`[intervals] Fetching details for ${activityIds.length} activities...`)
@@ -228,7 +240,6 @@ export async function syncActivities(userId: string): Promise<void> {
       variability_index: a.icu_variability_index ?? null,
       efficiency_factor: a.icu_efficiency_factor ?? null,
       aerobic_decoupling: a.decoupling ?? null,
-      hrss: null,  // not in Intervals.icu API
       // Movement
       distance_meters: a.distance ?? null,
       elevation_gain_meters: a.total_elevation_gain ?? null,
@@ -252,15 +263,27 @@ export async function syncActivities(userId: string): Promise<void> {
       calories: roundOrNull(a.calories),
       avg_temperature: a.average_temp ?? null,
       activity_name: a.name ?? null,
-      // JSONB — zones and intervals from detail
+      // JSONB — zones and intervals from detail (fall back to list-level data)
       zones: (() => {
-        const power = detail?.icu_zone_times ?? null
-        const hrRaw = detail?.icu_hr_zone_times ?? null
+        const power = detail?.icu_zone_times ?? a.icu_zone_times ?? null
+        const hrRaw = detail?.icu_hr_zone_times ?? a.icu_hr_zone_times ?? null
         const hr = Array.isArray(hrRaw)
           ? (hrRaw as number[]).map((secs, i) => ({ id: `Z${i + 1}`, secs })).filter(z => z.secs > 0)
           : null
+        // Store zone boundary arrays for label rendering.
+        // icu_hr_zones: absolute bpm ceilings (e.g. [153,162,...])
+        // icu_power_zones: % of FTP ceilings (e.g. [55,75,90,...]) — multiply by icu_ftp to get watts
+        const hrBounds    = Array.isArray(a.icu_hr_zones) && a.icu_hr_zones.length > 0 ? a.icu_hr_zones : null
+        const powerBounds =
+          Array.isArray(a.icu_power_zones) && a.icu_power_zones.length > 0 && a.icu_ftp != null && a.icu_ftp > 0
+            ? (a.icu_power_zones as number[]).map((p) => Math.round(p * (a.icu_ftp as number) / 100))
+            : null
         if (!power && !hr) return null
-        return { power, hr }
+        return {
+          power, hr,
+          ...(hrBounds    ? { hr_bounds: hrBounds }       : {}),
+          ...(powerBounds ? { power_bounds: powerBounds } : {}),
+        }
       })(),
       gaps: null,
       intervals_data: detail?.icu_groups ?? detail?.icu_intervals ?? null,

@@ -28,6 +28,8 @@ interface ContextViewProps {
   raceGoals: Row[]
   fuelingStrategy: Row | null
   healthInjury: Row | null
+  illnesses: Row[]
+  injuries: Row[]
   recoveryPreferences: Row | null
   pendingSuggestions: ContextSuggestion[]
 }
@@ -124,7 +126,7 @@ function confidenceBg(c: string): string {
 
 export default function ContextView({
   athleteProfile, coachStyle, planDna, trainingPatterns, adaptationRules,
-  raceGoals, fuelingStrategy, healthInjury, recoveryPreferences,
+  raceGoals, fuelingStrategy, healthInjury, illnesses, injuries, recoveryPreferences,
   pendingSuggestions: initialSuggestions,
 }: ContextViewProps) {
   const router = useRouter()
@@ -155,24 +157,21 @@ export default function ContextView({
   const pendingCount = (id: string) => {
     const modMap: Record<string, string> = {
       'plan-dna': 'plan_dna', 'patterns': 'training_patterns', 'rules': 'adaptation_rules',
-      'goals': 'race_goals', 'fueling': 'fueling_strategy', 'health': 'health_injury', 'recovery': 'recovery_preferences',
+      'goals': 'race_goals', 'fueling': 'fueling_strategy', 'recovery': 'recovery_preferences',
     }
+    if (id === 'health') return suggestions.filter((s) => s.target_module === 'illnesses' || s.target_module === 'injuries').length
     return suggestions.filter((s) => s.target_module === modMap[id]).length
   }
 
   async function handleMarkIllnessRecovered(illnessId: string) {
-    const illnesses = Array.isArray(healthInjury?.illnesses) ? (healthInjury.illnesses as Record<string, unknown>[]) : []
     const today = new Date().toISOString().split('T')[0]
-    const updated = illnesses.map((il) => il.id === illnessId ? { ...il, date_cleared: today } : il)
-    await fetch('/api/context/health_injury', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ illnesses: updated }) })
+    await fetch(`/api/context/illnesses/${illnessId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date_cleared: today }) })
     router.refresh()
   }
 
   async function handleMarkInjuryResolved(injuryId: string) {
-    const injuries = Array.isArray(healthInjury?.active_injuries) ? (healthInjury.active_injuries as Record<string, unknown>[]) : []
     const today = new Date().toISOString().split('T')[0]
-    const updated = injuries.map((inj) => inj.id === injuryId ? { ...inj, date_cleared: today } : inj)
-    await fetch('/api/context/health_injury', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active_injuries: updated }) })
+    await fetch(`/api/context/injuries/${injuryId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date_cleared: today }) })
     router.refresh()
   }
 
@@ -186,22 +185,32 @@ export default function ContextView({
     const apiModule = moduleMap[active.id]
     if (!apiModule) { setSaving(false); return }
     try {
-      let body: Record<string, unknown>
       if (active.id === 'health' && healthForm) {
-        const d = active.data
         const today = new Date().toISOString().split('T')[0]
-        const origIllnesses = Array.isArray(d?.illnesses) ? (d.illnesses as Record<string, unknown>[]) : []
-        const pastIllnesses = origIllnesses.filter((il) => !!il.date_cleared)
-        const origInjuries = Array.isArray(d?.active_injuries) ? (d.active_injuries as Record<string, unknown>[]) : []
-        const pastInjuries = origInjuries.filter((inj) => !!inj.date_cleared)
-        body = {
-          illnesses: [...healthForm.illnessForms.map((f) => ({ id: f.id, name: f.name, description: f.description, date_start: f.dateStart, restrictions: f.restrictions.split('\n').filter(Boolean), can_cycle: f.canCycle, can_run: f.canRun, can_swim: f.canSwim, physio_notes: f.notes, date_cleared: null, date_added: f.date_added ?? today })), ...pastIllnesses],
-          active_injuries: [...healthForm.injuryForms.map((f) => ({ id: f.id, body_part: f.bodyPart, description: f.description, date_start: f.dateStart, restrictions: f.restrictions.split('\n').filter(Boolean), can_cycle: f.canCycle, can_run: f.canRun, can_swim: f.canSwim, physio_notes: f.physioNotes, date_cleared: null, date_added: f.date_added ?? today })), ...pastInjuries],
-          monitoring_flags: healthForm.monitoringFlags, allergies: healthForm.allergies, medications: healthForm.medications,
-        }
-      } else {
-        body = editFields
+        const existingIllnessIds = new Set(illnesses.map((il) => String(il.id)))
+        const existingInjuryIds = new Set(injuries.map((inj) => String(inj.id)))
+
+        await Promise.all([
+          ...healthForm.illnessForms.map((f) => {
+            const payload = { name: f.name, description: f.description, date_start: f.dateStart, restrictions: f.restrictions.split('\n').filter(Boolean), can_cycle: f.canCycle, can_run: f.canRun, can_swim: f.canSwim, notes: f.notes, date_cleared: f.date_cleared ?? null }
+            if (existingIllnessIds.has(f.id)) {
+              return fetch(`/api/context/illnesses/${f.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+            }
+            return fetch('/api/context/illnesses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, date_start: f.dateStart || today }) })
+          }),
+          ...healthForm.injuryForms.map((f) => {
+            const payload = { body_part: f.bodyPart, description: f.description, date_start: f.dateStart, restrictions: f.restrictions.split('\n').filter(Boolean), can_cycle: f.canCycle, can_run: f.canRun, can_swim: f.canSwim, physio_notes: f.physioNotes, date_cleared: f.date_cleared ?? null }
+            if (existingInjuryIds.has(f.id)) {
+              return fetch(`/api/context/injuries/${f.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+            }
+            return fetch('/api/context/injuries', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, date_start: f.dateStart || today }) })
+          }),
+          fetch('/api/context/health_injury', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monitoring_flags: healthForm.monitoringFlags, allergies: healthForm.allergies, medications: healthForm.medications }) }),
+        ])
+        router.refresh(); setEditingId(null); setEditFields({}); setHealthForm(null)
+        setSaving(false); return
       }
+      const body = editFields
       const res = await fetch(`/api/context/${apiModule}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (res.ok) { router.refresh(); setEditingId(null); setEditFields({}); setHealthForm(null) }
       else { const b = await res.json().catch(() => ({})); setSaveError(b.error ?? `Save failed (HTTP ${res.status})`) }
@@ -212,13 +221,12 @@ export default function ContextView({
   function startEdit() {
     if (active.id === 'health') {
       const d = active.data
-      const today = new Date().toISOString().split('T')[0]
-      const illnesses = Array.isArray(d?.illnesses) ? (d.illnesses as Record<string, unknown>[]).filter((il) => !il.date_cleared) : []
-      const injuries = Array.isArray(d?.active_injuries) ? (d.active_injuries as Record<string, unknown>[]).filter((inj) => !inj.date_cleared) : []
+      const activeIllnesses = illnesses.filter((il) => !il.date_cleared)
+      const activeInjuries = injuries.filter((inj) => !inj.date_cleared)
       const flags = Array.isArray(d?.monitoring_flags) ? (d.monitoring_flags as string[]) : []
       setHealthForm({
-        illnessForms: illnesses.map((il) => ({ id: String(il.id ?? crypto.randomUUID()), name: String(il.name ?? ''), description: String(il.description ?? ''), dateStart: String(il.date_start ?? ''), restrictions: Array.isArray(il.restrictions) ? (il.restrictions as string[]).join('\n') : '', canCycle: typeof il.can_cycle === 'boolean' ? il.can_cycle : true, canRun: typeof il.can_run === 'boolean' ? il.can_run : false, canSwim: typeof il.can_swim === 'boolean' ? il.can_swim : true, notes: String(il.physio_notes ?? ''), date_cleared: (il.date_cleared as string | null | undefined) ?? null, date_added: il.date_added ? String(il.date_added) : today })),
-        injuryForms: injuries.map((inj) => ({ id: String(inj.id ?? crypto.randomUUID()), bodyPart: String(inj.body_part ?? ''), description: String(inj.description ?? ''), dateStart: String(inj.date_start ?? ''), restrictions: Array.isArray(inj.restrictions) ? (inj.restrictions as string[]).join('\n') : '', canCycle: typeof inj.can_cycle === 'boolean' ? inj.can_cycle : true, canRun: typeof inj.can_run === 'boolean' ? inj.can_run : false, canSwim: typeof inj.can_swim === 'boolean' ? inj.can_swim : true, physioNotes: String(inj.physio_notes ?? ''), date_cleared: (inj.date_cleared as string | null | undefined) ?? null, date_added: inj.date_added ? String(inj.date_added) : today })),
+        illnessForms: activeIllnesses.map((il) => ({ id: String(il.id ?? crypto.randomUUID()), name: String(il.name ?? ''), description: String(il.description ?? ''), dateStart: String(il.date_start ?? ''), restrictions: Array.isArray(il.restrictions) ? (il.restrictions as string[]).join('\n') : '', canCycle: typeof il.can_cycle === 'boolean' ? il.can_cycle : true, canRun: typeof il.can_run === 'boolean' ? il.can_run : false, canSwim: typeof il.can_swim === 'boolean' ? il.can_swim : true, notes: String(il.notes ?? ''), date_cleared: (il.date_cleared as string | null | undefined) ?? null })),
+        injuryForms: activeInjuries.map((inj) => ({ id: String(inj.id ?? crypto.randomUUID()), bodyPart: String(inj.body_part ?? ''), description: String(inj.description ?? ''), dateStart: String(inj.date_start ?? ''), restrictions: Array.isArray(inj.restrictions) ? (inj.restrictions as string[]).join('\n') : '', canCycle: typeof inj.can_cycle === 'boolean' ? inj.can_cycle : true, canRun: typeof inj.can_run === 'boolean' ? inj.can_run : false, canSwim: typeof inj.can_swim === 'boolean' ? inj.can_swim : true, physioNotes: String(inj.physio_notes ?? ''), date_cleared: (inj.date_cleared as string | null | undefined) ?? null })),
         monitoringFlags: flags, allergies: d?.allergies ? String(d.allergies) : '', medications: d?.medications ? String(d.medications) : '',
       })
       setEditingId(active.id); return
@@ -305,6 +313,8 @@ export default function ContextView({
             saving={saving}
             saveError={saveError}
             raceGoals={raceGoals}
+            illnesses={illnesses}
+            injuries={injuries}
             onEdit={startEdit}
             onFieldChange={(k, v) => setEditFields((prev) => ({ ...prev, [k]: v }))}
             onHealthFormChange={setHealthForm}
@@ -431,6 +441,7 @@ function TrainingPatternsPanel({ initialPatterns }: { initialPatterns: Row[] }) 
               <div key={id} style={{ padding: '16px 24px', borderTop: i > 0 ? '1px solid var(--border-subtle)' : 'none' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
                   <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: confidenceColor(conf), background: confidenceBg(conf), padding: '2px 7px', borderRadius: 3, flexShrink: 0, marginTop: 2 }}>{conf}</span>
+                  {!!p.unconfirmed && <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', background: 'var(--bg-3)', border: '1px solid var(--border-default)', padding: '2px 7px', borderRadius: 3, flexShrink: 0, marginTop: 2 }}>unconfirmed</span>}
                   <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>· {String(p.category ?? 'general')} · {String(p.sport ?? 'general')}</span>
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, marginBottom: 6 }}>{String(p.pattern_text ?? '')}</div>
@@ -697,6 +708,8 @@ interface ModuleDetailProps {
   saving: boolean
   saveError: string | null
   raceGoals: Row[]
+  illnesses: Row[]
+  injuries: Row[]
   onEdit: () => void
   onFieldChange: (k: string, v: string) => void
   onHealthFormChange: (s: HealthFormState) => void
@@ -707,7 +720,7 @@ interface ModuleDetailProps {
   onMarkInjuryResolved?: (id: string) => Promise<void>
 }
 
-function ModuleDetail({ module, editing, editFields, healthForm, saving, saveError, raceGoals, onEdit, onFieldChange, onHealthFormChange, onSave, onClose, onRefresh, onMarkIllnessRecovered, onMarkInjuryResolved }: ModuleDetailProps) {
+function ModuleDetail({ module, editing, editFields, healthForm, saving, saveError, raceGoals, illnesses, injuries, onEdit, onFieldChange, onHealthFormChange, onSave, onClose, onRefresh, onMarkIllnessRecovered, onMarkInjuryResolved }: ModuleDetailProps) {
 
   function renderContent() {
     if (module.id === 'athlete') {
@@ -715,7 +728,7 @@ function ModuleDetail({ module, editing, editFields, healthForm, saving, saveErr
     }
     if (module.id === 'health') {
       if (editing && healthForm) return <HealthModuleEdit healthForm={healthForm} onFormChange={onHealthFormChange} />
-      return <HealthModuleView data={module.data} onMarkIllnessRecovered={onMarkIllnessRecovered} onMarkInjuryResolved={onMarkInjuryResolved} />
+      return <HealthModuleView data={module.data} illnesses={illnesses} injuries={injuries} onMarkIllnessRecovered={onMarkIllnessRecovered} onMarkInjuryResolved={onMarkInjuryResolved} />
     }
     if (module.id === 'fueling') {
       if (editing) return <FuelingEditContent editFields={editFields} onFieldChange={onFieldChange} />
@@ -1438,18 +1451,18 @@ function fmtHealthDate(d?: string | null): string {
   catch { return d }
 }
 
-function HealthModuleView({ data, onMarkIllnessRecovered, onMarkInjuryResolved }: {
+function HealthModuleView({ data, illnesses: illnessRows, injuries: injuryRows, onMarkIllnessRecovered, onMarkInjuryResolved }: {
   data: Row | null
+  illnesses: Row[]
+  injuries: Row[]
   onMarkIllnessRecovered?: (id: string) => Promise<void>
   onMarkInjuryResolved?: (id: string) => Promise<void>
 }) {
   const [pastExpanded, setPastExpanded] = useState(false)
   const [marking, setMarking] = useState<string | null>(null)
-  const illnesses = Array.isArray(data?.illnesses) ? data.illnesses as Illness[] : []
-  const injuries = Array.isArray(data?.active_injuries) ? data.active_injuries as Injury[] : []
-  const activeIllnesses = illnesses.filter((il) => !il.date_cleared)
-  const pastIllnesses = illnesses.filter((il) => !!il.date_cleared)
-  const activeInjuries = injuries.filter((inj) => !inj.date_cleared)
+  const activeIllnesses = illnessRows.filter((il) => !il.date_cleared) as Illness[]
+  const pastIllnesses = illnessRows.filter((il) => !!il.date_cleared) as Illness[]
+  const activeInjuries = injuryRows.filter((inj) => !inj.date_cleared) as Injury[]
 
   async function doMark(id: string, fn?: (id: string) => Promise<void>) {
     if (!fn || !id) return; setMarking(id); await fn(id); setMarking(null)

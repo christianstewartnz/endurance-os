@@ -43,7 +43,7 @@ const ARRAY_FIELDS: Record<string, string[]> = {
 
 // Fields that are jsonb in the DB (parse JSON string)
 const JSONB_FIELDS: Record<string, string[]> = {
-  health_injury:        ['active_injuries', 'illnesses'],
+  health_injury:        [],  // illnesses/active_injuries moved to their own tables
   plan_dna:             ['weekly_structure'],
   athlete_profile:      ['zones_cycling', 'zones_running', 'zones_swimming', 'pbs'],
   fueling_strategy:     [],

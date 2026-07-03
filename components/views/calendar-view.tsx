@@ -167,6 +167,8 @@ function getHrvStatus(w: WellnessCacheRow | undefined) {
 
 // ── Zone helpers ──────────────────────────────────────────────────────────────
 
+export interface ZoneDefinition { name: string; min: number; max: number }
+
 interface ZoneSegment { id: number; secs: number; color: string }
 
 function parseZoneSegments(zones: unknown): ZoneSegment[] | null {
@@ -178,14 +180,15 @@ function parseZoneSegments(zones: unknown): ZoneSegment[] | null {
   }
   const valid = (zones as Record<string, unknown>[]).filter((z) => getTime(z) !== null)
   if (valid.length === 0) return null
-  return valid.map((z) => {
-    // id may be a number or a string like "Z1"
+  return valid.map((z, idx) => {
+    // id may be a number or string like "Z1"/"Z2". Non-numeric ids (e.g. "SS" for Sweet Spot)
+    // fall back to sequential index so they don't collide with Z1.
     const rawId = z.id
     const id = typeof rawId === 'number'
       ? rawId
       : typeof rawId === 'string'
-        ? (parseInt(rawId.replace(/\D/g, ''), 10) || 1)
-        : 1
+        ? (parseInt(rawId.replace(/\D/g, ''), 10) || (idx + 1))
+        : (idx + 1)
     return { id, secs: getTime(z)!, color: ZONE_COLORS[Math.min(id - 1, ZONE_COLORS.length - 1)] }
   })
 }
@@ -198,6 +201,31 @@ function getPowerZones(zones: unknown): unknown {
 function getHrZones(zones: unknown): unknown {
   if (!zones || typeof zones !== 'object' || Array.isArray(zones)) return null
   return (zones as Record<string, unknown>).hr ?? null
+}
+
+// Convert stored power_bounds array (same ceiling-value format as hr_bounds) into ZoneDefinition[].
+function getPowerZoneDefs(zones: unknown): ZoneDefinition[] | undefined {
+  if (!zones || typeof zones !== 'object' || Array.isArray(zones)) return undefined
+  const bounds = (zones as Record<string, unknown>).power_bounds
+  if (!Array.isArray(bounds) || bounds.length === 0) return undefined
+  return (bounds as number[]).map((upper, i) => ({
+    name: `Z${i + 1}`,
+    min: i === 0 ? 0 : bounds[i - 1] as number,
+    max: upper,
+  }))
+}
+
+// Convert stored hr_bounds array (e.g. [153,162,171,181,186,191,201]) into ZoneDefinition[].
+// Each value is the upper limit of that zone; Z1 lower bound is 0.
+function getHrZoneDefs(zones: unknown): ZoneDefinition[] | undefined {
+  if (!zones || typeof zones !== 'object' || Array.isArray(zones)) return undefined
+  const bounds = (zones as Record<string, unknown>).hr_bounds
+  if (!Array.isArray(bounds) || bounds.length === 0) return undefined
+  return (bounds as number[]).map((upper, i) => ({
+    name: `Z${i + 1}`,
+    min: i === 0 ? 0 : bounds[i - 1] as number,
+    max: upper,
+  }))
 }
 
 function ZoneBar({ zones, fallbackColor, height = 6 }: {
@@ -217,19 +245,27 @@ function ZoneBar({ zones, fallbackColor, height = 6 }: {
   )
 }
 
-function ZoneLabels({ zones }: { zones: unknown }) {
+function ZoneLabels({ zones, definitions, unit = 'W' }: {
+  zones: unknown
+  definitions?: ZoneDefinition[]
+  unit?: string
+}) {
   const segments = parseZoneSegments(zones)
   if (!segments) return null
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 8 }}>
-      {segments.map((seg, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
-          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
-            Z{seg.id} · {formatDuration(seg.secs)}
-          </span>
-        </div>
-      ))}
+      {segments.map((seg, i) => {
+        const def = definitions?.find(d => d.name === `Z${seg.id}`)
+        const rangeStr = def != null ? ` · ${def.min}–${def.max}${unit}` : ''
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
+            <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
+              Z{seg.id}{rangeStr} · {formatDuration(seg.secs)}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -255,20 +291,33 @@ function parseLaps(data: unknown): LapData[] | null {
     groups = data
   } else if (typeof data === 'object') {
     const obj = data as Record<string, unknown>
-    groups = Array.isArray(obj.icu_groups) ? obj.icu_groups : null
+    // icu_groups is the structured view; fall back to icu_intervals flat list
+    groups = Array.isArray(obj.icu_groups)
+      ? obj.icu_groups
+      : Array.isArray(obj.icu_intervals)
+        ? obj.icu_intervals
+        : null
   }
   if (!groups || groups.length === 0) return null
-  return (groups as Record<string, unknown>[]).map((g, i) => ({
-    name: typeof g.name === 'string' ? g.name : `Lap ${i + 1}`,
-    elapsed_time: typeof g.elapsed_time === 'number' ? g.elapsed_time : null,
-    average_watts: typeof g.average_watts === 'number' ? g.average_watts : null,
-    normalized_watts: typeof g.normalized_watts === 'number' ? g.normalized_watts : null,
-    average_heartrate: typeof g.average_heartrate === 'number' ? g.average_heartrate : null,
-    average_speed: typeof g.average_speed === 'number' ? g.average_speed : null,
-    distance: typeof g.distance === 'number' ? g.distance : null,
-    icu_training_load: typeof g.icu_training_load === 'number' ? g.icu_training_load : null,
-    total_elevation_gain: typeof g.total_elevation_gain === 'number' ? g.total_elevation_gain : null,
-  }))
+  return (groups as Record<string, unknown>[]).map((g, i) => {
+    const num = (k: string) => typeof g[k] === 'number' ? g[k] as number : null
+    // API uses 'weighted_average_watts' and 'training_load'; handle both spellings
+    const np  = num('normalized_watts') ?? num('weighted_average_watts')
+    const tss = num('icu_training_load') ?? num('training_load')
+    const label = typeof g.label === 'string' ? g.label : null
+    const name  = typeof g.name  === 'string' ? g.name  : null
+    return {
+      name: name ?? label ?? `Lap ${i + 1}`,
+      elapsed_time:      num('elapsed_time'),
+      average_watts:     num('average_watts'),
+      normalized_watts:  np,
+      average_heartrate: num('average_heartrate'),
+      average_speed:     num('average_speed'),
+      distance:          num('distance'),
+      icu_training_load: tss,
+      total_elevation_gain: num('total_elevation_gain'),
+    }
+  })
 }
 
 function parseBestEffort(gaps: unknown, targetSecs: number): number | null {
@@ -971,7 +1020,11 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
           const z = isCycling ? getPowerZones(session.zones) : getHrZones(session.zones)
           return <>
             <ZoneBar zones={z} fallbackColor={sportColor} height={10} />
-            <ZoneLabels zones={z} />
+            <ZoneLabels
+              zones={z}
+              definitions={isCycling ? getPowerZoneDefs(session.zones) : getHrZoneDefs(session.zones)}
+              unit={isCycling ? 'W' : 'bpm'}
+            />
             {!parseZoneSegments(z) && (
               <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
                 Zone data unavailable — sync to populate
@@ -1092,7 +1145,7 @@ function PowerTab({ session }: { session: SessionNoteRow }) {
           Zone distribution
         </div>
         <ZoneBar zones={getPowerZones(session.zones)} fallbackColor={getSportColor(session.sport)} height={10} />
-        <ZoneLabels zones={getPowerZones(session.zones)} />
+        <ZoneLabels zones={getPowerZones(session.zones)} definitions={getPowerZoneDefs(session.zones)} unit="W" />
         {!parseZoneSegments(getPowerZones(session.zones)) && (
           <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
             Zone data unavailable
@@ -1130,7 +1183,6 @@ function HeartrateTab({ session }: { session: SessionNoteRow }) {
   const stats: Stat[] = [
     { label: 'Avg HR',    value: session.avg_hr != null ? String(Math.round(session.avg_hr)) : '—', unit: 'bpm' },
     { label: 'Max HR',    value: session.max_hr != null ? String(Math.round(session.max_hr)) : '—', unit: 'bpm' },
-    { label: 'HRSS',      value: session.hrss != null ? session.hrss.toFixed(1) : '—' },
     { label: 'Aerobic Dec', value: session.aerobic_decoupling != null ? `${session.aerobic_decoupling.toFixed(1)}%` : '—' },
   ]
 
@@ -1163,7 +1215,7 @@ function HeartrateTab({ session }: { session: SessionNoteRow }) {
           HR zone distribution
         </div>
         <ZoneBar zones={getHrZones(session.zones)} fallbackColor={getSportColor(session.sport)} height={10} />
-        <ZoneLabels zones={getHrZones(session.zones)} />
+        <ZoneLabels zones={getHrZones(session.zones)} definitions={getHrZoneDefs(session.zones)} unit="bpm" />
         {!parseZoneSegments(getHrZones(session.zones)) && (
           <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>
             Zone data unavailable
@@ -1226,7 +1278,7 @@ function RunningPaceTab({ session }: { session: SessionNoteRow }) {
       <div>
         <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 8 }}>HR zone distribution</div>
         <ZoneBar zones={getHrZones(session.zones)} fallbackColor={getSportColor(session.sport)} height={10} />
-        <ZoneLabels zones={getHrZones(session.zones)} />
+        <ZoneLabels zones={getHrZones(session.zones)} definitions={getHrZoneDefs(session.zones)} unit="bpm" />
         {!parseZoneSegments(getHrZones(session.zones)) && (
           <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 6 }}>Zone data unavailable — sync to populate</div>
         )}

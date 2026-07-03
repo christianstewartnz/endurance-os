@@ -333,6 +333,7 @@ export default function CoachPanel() {
       const decoder = new TextDecoder()
       let fullText = ''
       let buffer = ''
+      let enduranceMeta: { modulesLoaded: string[]; newSuggestionIds: string[] } | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -350,8 +351,15 @@ export default function CoachPanel() {
             const parsed = JSON.parse(data) as {
               type?: string
               delta?: { type?: string; text?: string }
+              modulesLoaded?: string[]
+              newSuggestionIds?: string[]
             }
-            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+            if (parsed.type === 'endurance_meta') {
+              enduranceMeta = {
+                modulesLoaded: parsed.modulesLoaded ?? [],
+                newSuggestionIds: parsed.newSuggestionIds ?? [],
+              }
+            } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
               fullText += parsed.delta.text ?? ''
               setMessages((prev) =>
                 prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText } : m)
@@ -363,36 +371,25 @@ export default function CoachPanel() {
         }
       }
 
-      // Parse [read:...] declaration
-      const readMatch = fullText.match(/\[read:([\w,]+)\]\s*$/)
-      const modulesRead = readMatch ? readMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : []
-
-      // Strip [read:...] and context_update blocks from displayed text
-      const contextUpdateRegex = /\{"context_update":\{[\s\S]*?\}\}/g
-      let displayText = fullText.replace(/\[read:[\w,]+\]\s*$/, '').trim()
-      const allMatches = displayText.match(contextUpdateRegex)
-      if (allMatches && allMatches.length > 0) {
-        displayText = displayText.replace(contextUpdateRegex, '').trim()
-      }
-
+      const modulesRead = enduranceMeta?.modulesLoaded ?? []
       setMessages((prev) =>
-        prev.map((m) => m.id === aiMsgId ? { ...m, content: displayText, modulesRead } : m)
+        prev.map((m) => m.id === aiMsgId ? { ...m, content: fullText, modulesRead } : m)
       )
 
-      // Show inline suggestion cards if context updates were found
-      if (allMatches && allMatches.length > 0) {
+      // Show inline suggestion cards for review-required proposals
+      if (enduranceMeta && enduranceMeta.newSuggestionIds.length > 0) {
         try {
           const pendingRes = await fetch('/api/context/suggestions/pending')
           const { suggestions } = await pendingRes.json() as {
-            suggestions: Array<ContextSuggestion & { id: string; source_conversation_id: string | null }>
+            suggestions: Array<ContextSuggestion & { id: string }>
           }
-          const forThisConv = (suggestions ?? []).filter(
-            (s) => s.source_conversation_id === conversationId
+          const forThisMessage = (suggestions ?? []).filter(
+            (s) => enduranceMeta!.newSuggestionIds.includes(s.id)
           )
-          if (forThisConv.length > 0) {
+          if (forThisMessage.length > 0) {
             setInlineCards((prev) => {
               const existingIds = new Set(prev.map((c) => c.suggestion.id))
-              const trulyNew = forThisConv.filter((s) => !existingIds.has(s.id))
+              const trulyNew = forThisMessage.filter((s) => !existingIds.has(s.id))
               if (!trulyNew.length) return prev
               return [
                 ...prev,
@@ -1013,7 +1010,7 @@ function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion 
     return <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5 }}>{suggested_value}</div>
   }
 
-  if (target_module === 'health_injury' && target_field === 'illnesses') {
+  if (target_module === 'illnesses') {
     const name = String(parsed.name ?? 'Illness')
     const desc = parsed.description ? String(parsed.description) : null
     const start = parsed.date_start ? String(parsed.date_start) : null
@@ -1021,7 +1018,6 @@ function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>🤒</span>
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{name}</span>
           {start && <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>from {start}</span>}
         </div>
@@ -1035,7 +1031,7 @@ function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion 
     )
   }
 
-  if (target_module === 'health_injury' && target_field === 'active_injuries') {
+  if (target_module === 'injuries') {
     const part = String(parsed.body_part ?? 'Injury')
     const desc = parsed.description ? String(parsed.description) : null
     const start = parsed.date_start ? String(parsed.date_start) : null
@@ -1043,7 +1039,6 @@ function SuggestionValueDisplay({ suggestion }: { suggestion: ContextSuggestion 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>🩹</span>
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-1)' }}>{part}</span>
           {start && <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>from {start}</span>}
         </div>

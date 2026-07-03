@@ -226,7 +226,8 @@ function buildPatternsLayer(patterns: Record<string, unknown>[]): string {
     const conf = (p.confidence as string ?? 'low').toUpperCase()
     const count = p.observation_count ?? 1
     const times = count === 1 ? '1 time' : `${count} times`
-    return `[pattern:${p.id}] Category: ${p.category ?? 'general'}${p.sport && p.sport !== 'general' ? ` · ${p.sport}` : ''}
+    const unconfirmedTag = p.unconfirmed ? ' [unconfirmed]' : ''
+    return `[id:${p.id}] Category: ${p.category ?? 'general'}${p.sport && p.sport !== 'general' ? ` · ${p.sport}` : ''}${unconfirmedTag}
 "${p.pattern_text}"
 Confidence: ${conf} · Observed ${times}${p.first_observed_date ? ` · first seen ${p.first_observed_date}` : ''}${p.last_observed_date ? ` · last seen ${p.last_observed_date}` : ''}`
   }).join('\n\n')
@@ -242,7 +243,7 @@ function buildRulesLayer(rules: Record<string, unknown>[]): string {
   if (!rules.length) return ''
 
   const items = rules.map((r) => {
-    return `[${r.apply_mode ?? 'auto_propose'}] ${r.name}:
+    return `[id:${r.id}] [${r.apply_mode ?? 'auto_propose'}] ${r.name}:
   IF ${r.trigger_condition}
   THEN ${r.action}`
   }).join('\n\n')
@@ -290,7 +291,7 @@ function buildRacesLayer(races: Record<string, unknown>[]): string {
     const goalTime = r.overall_goal_time_seconds ? formatTimeSecs(r.overall_goal_time_seconds as number) : null
     const goalStr  = [goalTime, r.overall_goal_position].filter(Boolean).join(' · ') || '—'
 
-    let section = `[${r.priority ?? 'B'}-RACE] ${r.race_name} · ${r.race_date ?? '—'}${daysAway != null ? ` · ${daysAway} days away` : ''}
+    let section = `[id:${r.id}] [${r.priority ?? 'B'}-RACE] ${r.race_name} · ${r.race_date ?? '—'}${daysAway != null ? ` · ${daysAway} days away` : ''}
 Location: ${r.location ?? '—'}
 Goal: ${goalStr}
 ${r.stretch_goal ? `Stretch: ${r.stretch_goal}\n` : ''}${r.general_notes ? `Notes: ${r.general_notes}\n` : ''}`
@@ -354,28 +355,31 @@ Pre-race:
   ${fueling.heat_threshold_celsius ? `Heat protocol: above ${fueling.heat_threshold_celsius}°C, add ${fueling.heat_fluid_increase_ml ?? 0}ml fluid` : ''}`
 }
 
-function buildHealthLayer(health: Record<string, unknown> | null, recentInjuries: Record<string, unknown>[]): string {
-  if (!health) return ''
+function buildHealthLayer(
+  health: Record<string, unknown> | null,
+  illnesses: Record<string, unknown>[],
+  injuries: Record<string, unknown>[],
+  recentInjuries: Record<string, unknown>[],
+): string {
+  const activeIllnesses = illnesses.filter((il) => !il.date_cleared)
+  const activeInjuries = injuries.filter((inj) => !inj.date_cleared)
 
-  const activeIllnesses = health.illnesses as unknown[]
-  const illnessesStr = Array.isArray(activeIllnesses) && activeIllnesses.length
-    ? (activeIllnesses as Array<{ name?: string; description?: string; date_start?: string; date_cleared?: string | null; restrictions?: string[]; hrv_impact?: string }>)
-        .map((il, originalIdx) => ({ ...il, originalIdx }))
-        .filter((il) => !il.date_cleared)
-        .map((il) => `[illness_${il.originalIdx}] ${il.name ?? 'Illness'} (since ${il.date_start ?? '?'}): ${il.description ?? ''}${il.hrv_impact ? ` — HRV: ${il.hrv_impact}` : ''}${il.restrictions?.length ? ` — restrictions: ${il.restrictions.join(', ')}` : ''}`)
-        .join('\n  ') || 'None'
+  const hasAnything = health || activeIllnesses.length || activeInjuries.length || recentInjuries.length
+  if (!hasAnything) return ''
+
+  const illnessesStr = activeIllnesses.length
+    ? activeIllnesses
+        .map((il) => { const r = Array.isArray(il.restrictions) ? il.restrictions as string[] : []; return `[id:${il.id}] ${il.name ?? 'Illness'} (since ${il.date_start ?? '?'}): ${il.description ?? ''}${r.length ? ` — restrictions: ${r.join(', ')}` : ''}` })
+        .join('\n  ')
     : 'None'
 
-  const active = health.active_injuries as unknown[]
-  const activeStr = Array.isArray(active) && active.length
-    ? (active as Array<{ body_part?: string; description?: string; restrictions?: string[]; date_cleared?: string | null }>)
-        .map((inj, originalIdx) => ({ ...inj, originalIdx }))
-        .filter((inj) => !inj.date_cleared)
-        .map((inj) => `[active_injury_${inj.originalIdx}] ${inj.body_part}: ${inj.description}${inj.restrictions?.length ? ` — restrictions: ${inj.restrictions.join(', ')}` : ''}`)
-        .join('\n  ') || 'None'
+  const activeStr = activeInjuries.length
+    ? activeInjuries
+        .map((inj) => { const r = Array.isArray(inj.restrictions) ? inj.restrictions as string[] : []; return `[id:${inj.id}] ${inj.body_part}: ${inj.description}${r.length ? ` — restrictions: ${r.join(', ')}` : ''}` })
+        .join('\n  ')
     : 'None'
 
-  const flags = Array.isArray(health.monitoring_flags) ? (health.monitoring_flags as string[]).join('\n  - ') : ''
+  const flags = health && Array.isArray(health.monitoring_flags) ? (health.monitoring_flags as string[]).join('\n  - ') : ''
   const historyStr = recentInjuries.length
     ? recentInjuries.map((h) => `${h.body_part} · ${h.date_start}${h.date_resolved ? ` → ${h.date_resolved}` : ''}\n  ${h.description}${h.resolution ? ` — resolved: ${h.resolution}` : ''}`).join('\n')
     : 'None on record'
@@ -388,8 +392,8 @@ Active illnesses: ${illnessesStr}
 Active injuries: ${activeStr}
 ${flags ? `\nMonitoring flags:\n  - ${flags}` : ''}
 ${recentInjuries.length ? `\nRelevant history:\n${historyStr}` : ''}
-Allergies: ${health.allergies ?? 'None'}
-Medications: ${health.medications ?? 'None'}`
+Allergies: ${health?.allergies ?? 'None'}
+Medications: ${health?.medications ?? 'None'}`
 }
 
 function buildRecoveryLayer(recovery: Record<string, unknown> | null): string {
@@ -478,7 +482,7 @@ function buildSessionHistoryLayer(sessions: Record<string, unknown>[]): string {
 
     const sport = s.sport as string | null
 
-    let line = `${date} · ${s.session_type ?? 'Workout'} · ${sport ?? ''}`
+    let line = `[id:${s.id}] ${date} · ${s.session_type ?? 'Workout'} · ${sport ?? ''}`
     line += `\n  Duration: ${duration}`
 
     if (sport === 'cycling') {
@@ -557,135 +561,29 @@ Conversations older than 14 days are archived. If the athlete references an olde
 
 function buildContextUpdateInstructions(): string {
   return `════════════════════════════════════════
-CONTEXT UPDATE PROTOCOL — MANDATORY
+CONTEXT UPDATES
 ════════════════════════════════════════
 
-You MUST propose context updates when any of these occur:
+Call propose_context_update when you reach agreement with the athlete on a change to their stored context. One call per change. Use the real row IDs shown above (prefixed [id:...]) — never invent IDs.
 
-ALWAYS propose update to health_injury when:
-- Athlete mentions illness, injury, pain, feeling unwell
-- Athlete confirms medical advice or restrictions
-- Recovery metrics consistently abnormal
+training_patterns: only use kind "observation" for observed tendencies about the athlete (e.g. "struggles with VO2 after long weekend rides"). Never save instructions or restrictions here — those belong in illnesses/injuries restrictions[]. If you would write "no training until X", that is a restriction, not a pattern.
 
-ALWAYS propose update to plan_dna when:
-- New training structure agreed upon
-- Weekly hours target confirmed
-- Training days or session types locked in
+Auto-applied without review: training_patterns (kind=observation), session_notes.
+Requires athlete review before applying: illnesses, injuries, plan_dna, adaptation_rules, recovery_preferences.
 
-ALWAYS propose update to training_patterns when:
-- Consistent behaviour observed across sessions
-- Athlete confirms a preference or tendency
-- Pattern emerges from conversation
-
-PROCESS:
-1. Have the coaching conversation naturally
-2. When you reach a conclusion or agreement, end your FINAL message with context update JSON blocks
-3. Do not ask permission — just include them
-4. You can include multiple blocks if needed
-
-FORMAT — append at the very end of your message:
-
-For illness — adding new (use target_field "illnesses"):
-{"context_update":{"target_module":"health_injury","target_field":"illnesses","action_type":"append","suggested_value":"{\"name\":\"Cold\",\"description\":\"Upper respiratory infection\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no training until HRV normalises to within 5% baseline\"],\"date_cleared\":null}","reasoning":"Athlete confirmed cold this week","evidence":"HRV suppressed all week, symptoms improving"}}
-
-For illness — marking resolved (use the [illness_N] index shown in HEALTH & INJURY):
-{"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"archive","suggested_value":"Cold cleared — athlete confirmed symptoms resolved and HRV returning to baseline","reasoning":"Athlete confirmed recovery","evidence":"HRV back within 3% of baseline, symptoms gone"}}
-
-ARCHIVE ILLNESS — MANDATORY PATTERN REVIEW:
-When archiving an illness, always scan TRAINING PATTERNS for any restriction-style patterns
-that were created alongside the illness and propose removing them.
-
-  KEEP patterns that are physiological observations (long-term value):
-    ✓ "Upper respiratory illness causes 5-7 day HRV suppression beyond symptom resolution"
-    ✓ "HRV drops 25%+ during overreaching phases"
-
-  PROPOSE REMOVE for patterns that are actually restrictions or instructions:
-    ✗ "No training until HRV normalises"
-    ✗ "Rest until feeling better"
-    ✗ Any pattern containing "no training", "rest until", "avoid until"
-    ✗ Any pattern that is clearly an instruction rather than an observation
-    ✗ Any pattern created at the same time as the illness being archived
-
-Example — when clearing an illness, propose both the archive AND any restriction removals:
-{"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"archive","suggested_value":"Cold cleared — athlete confirmed symptoms resolved and HRV returning to baseline","reasoning":"Athlete confirmed recovery","evidence":"HRV back within 3% of baseline, symptoms gone"}}
-{"context_update":{"target_module":"training_patterns","target_field":"<pattern-uuid>","action_type":"remove","suggested_value":null,"reasoning":"This is a restriction not a pattern — removing now illness is cleared","evidence":"Pattern contains instruction language ('no training until HRV normalises') not observational language"}}
-
-For physical injuries — adding new (use target_field "active_injuries"):
-{"context_update":{"target_module":"health_injury","target_field":"active_injuries","action_type":"append","suggested_value":"{\"body_part\":\"left knee\",\"description\":\"IT band strain\",\"date_start\":\"2026-05-18\",\"restrictions\":[\"no running for 4 weeks\"],\"can_cycle\":true,\"can_swim\":true,\"can_strength\":false,\"date_cleared\":null}","reasoning":"Athlete confirmed knee injury","evidence":"Pain on lateral knee during long run, confirmed by physio"}}
-
-For physical injuries — marking resolved (use the [active_injury_N] index shown in HEALTH & INJURY):
-{"context_update":{"target_module":"health_injury","target_field":"active_injury_0","action_type":"archive","suggested_value":"IT band resolved — returned to full running load","reasoning":"Athlete confirmed no pain on long run","evidence":"Completed 18km with no symptoms"}}
-
-For training_patterns — superseding an outdated pattern (target_field = the pattern's id to supersede):
-{"context_update":{"target_module":"training_patterns","target_field":"<pattern-uuid>","action_type":"supersede","suggested_value":"Updated pattern text that replaces the old one","reasoning":"Old pattern no longer accurate","evidence":"..."}}
-
-For removing incorrectly added data:
-{"context_update":{"target_module":"training_patterns","target_field":"<pattern-uuid>","action_type":"remove","suggested_value":"","reasoning":"Pattern was added in error","evidence":"..."}}
-{"context_update":{"target_module":"health_injury","target_field":"illness_0","action_type":"remove","suggested_value":"","reasoning":"Illness was logged incorrectly","evidence":"..."}}
-
-For plan_dna:
-{"context_update":{"target_module":"plan_dna","target_field":"weekly_structure","action_type":"update_field","suggested_value":"{\"tuesday\":\"quality\",\"friday\":\"quality\",\"sunday\":\"long\",\"monday\":\"easy\",\"wednesday\":\"easy\",\"thursday\":\"easy\",\"saturday\":\"easy\"}","reasoning":"Athlete confirmed weekly structure","evidence":"Agreed in conversation — 9h weekly target"}}
-
-For training_patterns — OBSERVED TENDENCIES only, not instructions:
-{"context_update":{"target_module":"training_patterns","target_field":null,"action_type":"append","suggested_value":"Upper respiratory illness suppresses HRV for 5-7 days beyond symptom resolution","reasoning":"Pattern observed from illness conversation","evidence":"HRV remained 7% suppressed all week despite symptoms clearing"}}
-
-DISTINCTION — training_patterns vs restrictions:
-  training_patterns → observed tendencies about the athlete (what IS true)
-    e.g. "Struggles with VO2 after long weekend rides"
-    e.g. "Upper respiratory illness causes 7-day HRV suppression"
-  health_injury restrictions[] → what to do about it (instructions)
-    e.g. "No training until HRV within 5% baseline"
-    e.g. "No running for 4 weeks"
-  NEVER put an instruction like "no training until X" into training_patterns.
-  NEVER put an observed tendency into restrictions[].
-
-USING READINESS METRICS IN REASONING:
-When readiness data is available, reference it specifically rather than generically:
-  "Your resting HR of Xbpm is elevated vs your recent range of Y–Zbpm — that's a load signal."
-  "Sleep of Xh last night is below your typical Yh — factor that into today's session expectation."
-  "HRV at Xms is X% below your 14-day baseline — this warrants a conservative approach today."
-Always tie the metric to a concrete coaching decision. Never show raw numbers without context.
-
-RULES:
-- NEVER skip this when agreement is reached
-- NEVER say "I'll note that" without the JSON block
-- JSON must be valid — properly escaped quotes inside string values
-- Multiple updates = multiple separate JSON blocks, each on its own line
-- Each block must be complete and parseable on its own
-
-Allowed target_module values:
-  plan_dna | training_patterns | adaptation_rules | race_goals |
-  fueling_strategy | health_injury | recovery_preferences | session_notes
-
-Allowed action_type values:
-  append | update_field | archive | supersede | remove | replace_array_item
-
-════════════════════════════════════════
-READING DECLARATION — MANDATORY
-════════════════════════════════════════
-
-After EVERY response, append on the final line (after any JSON blocks):
-[read:module1,module2,module3]
-
-Use these module names exactly:
-  athlete, plandna, patterns, rules, races, health, fueling, recovery,
-  todayshrv, readiness, form, thisweek, lastsession, lastride, lastrun,
-  lastswim, last7days, last28days, coachstyle
-
-Include every module you actually consulted to generate this response.
-Do not list modules you did not use.
-
-Examples:
-  [read:todayshrv,plandna,patterns]
-  [read:health,todayshrv,lastride]
-  [read:races,plandna,fueling]
+Never tell the athlete you've "saved" or "noted" something without calling this tool.
 
 ════════════════════════════════════════
 END OF CONTEXT
 ════════════════════════════════════════`
 }
 
-export async function buildSystemPrompt(userId: string): Promise<string> {
+export interface BuildSystemPromptResult {
+  prompt: string
+  modulesLoaded: string[]
+}
+
+export async function buildSystemPrompt(userId: string): Promise<BuildSystemPromptResult> {
   const admin = createAdminClient()
   const today = todayStr()
   const ago28 = daysAgoStr(28)
@@ -700,6 +598,8 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     racesRes,
     fuelingRes,
     healthRes,
+    illnessesRes,
+    injuriesRes,
     injuryHistoryRes,
     recoveryRes,
     sessionsRes,
@@ -714,7 +614,9 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     admin.from('adaptation_rules').select('*').eq('user_id', userId).eq('enabled', true),
     admin.from('race_goals').select('*').eq('user_id', userId).eq('status', 'upcoming').order('race_date', { ascending: true }),
     admin.from('fueling_strategy').select('*').eq('user_id', userId).maybeSingle(),
-    admin.from('health_injury').select('*').eq('user_id', userId).maybeSingle(),
+    admin.from('health_injury').select('monitoring_flags, allergies, medications').eq('user_id', userId).maybeSingle(),
+    admin.from('illnesses').select('*').eq('user_id', userId).is('date_cleared', null).order('created_at', { ascending: false }),
+    admin.from('injuries').select('*').eq('user_id', userId).is('date_cleared', null).order('created_at', { ascending: false }),
     admin.from('injury_history').select('*').eq('user_id', userId).order('date_start', { ascending: false }).limit(5),
     admin.from('recovery_preferences').select('*').eq('user_id', userId).maybeSingle(),
     admin.from('session_notes').select('*').eq('user_id', userId).eq('is_archived', false).gte('session_date', ago28).order('session_date', { ascending: false }),
@@ -731,6 +633,8 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
   const races = (racesRes.data ?? []) as Record<string, unknown>[]
   const fueling = fuelingRes.data as Record<string, unknown> | null
   const health = healthRes.data as Record<string, unknown> | null
+  const illnesses = (illnessesRes.data ?? []) as Record<string, unknown>[]
+  const injuries = (injuriesRes.data ?? []) as Record<string, unknown>[]
   const injuryHistory = (injuryHistoryRes.data ?? []) as Record<string, unknown>[]
   const recovery = recoveryRes.data as Record<string, unknown> | null
   const sessions = (sessionsRes.data ?? []) as Record<string, unknown>[]
@@ -742,6 +646,21 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
   const effectivePace = (profile?.threshold_pace_override ?? profile?.threshold_pace_per_km) as number | null
   const effectiveCss = (profile?.threshold_css_override ?? profile?.threshold_css) as number | null
 
+  // Track which modules were actually loaded with data
+  const modulesLoaded: string[] = []
+  if (profile) modulesLoaded.push('athlete')
+  if (style) modulesLoaded.push('coachstyle')
+  if (plan) modulesLoaded.push('plandna')
+  if (patterns.length) modulesLoaded.push('patterns')
+  if (rules.length) modulesLoaded.push('rules')
+  if (races.length) modulesLoaded.push('races')
+  if (fueling) modulesLoaded.push('fueling')
+  if (illnesses.length || injuries.length || health) modulesLoaded.push('health')
+  if (recovery) modulesLoaded.push('recovery')
+  if (todayWellness) modulesLoaded.push('todayshrv')
+  if (sessions.length) modulesLoaded.push('sessions')
+  if (recentConversations.length) modulesLoaded.push('recentconvs')
+
   const sections = [
     'You are an expert endurance coach embedded in Endurance.OS, an AI-native training intelligence platform. You have full access to this athlete\'s training context, history, and readiness data. Use it to give specific, evidence-based coaching — not generic advice.',
     buildCoachInstructions(style),
@@ -751,7 +670,7 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     buildRulesLayer(rules),
     buildRacesLayer(races),
     buildFuelingLayer(fueling),
-    buildHealthLayer(health, injuryHistory),
+    buildHealthLayer(health, illnesses, injuries, injuryHistory),
     buildRecoveryLayer(recovery),
     buildReadinessLayer(todayWellness, recentWellness),
     buildSessionHistoryLayer(sessions),
@@ -759,17 +678,8 @@ export async function buildSystemPrompt(userId: string): Promise<string> {
     buildContextUpdateInstructions(),
   ].filter(Boolean)
 
-  return sections.join('\n\n')
-}
-
-export function getLoadedContextModules(systemPrompt: string): string[] {
-  const modules: string[] = []
-  if (systemPrompt.includes('TODAY\'S READINESS')) modules.push('@todayshrv')
-  if (systemPrompt.includes('CURRENT PLAN')) modules.push('@plandna')
-  if (systemPrompt.includes('TRAINING PATTERNS')) modules.push('@patterns')
-  if (systemPrompt.includes('RACE GOALS')) modules.push('@goals')
-  if (systemPrompt.includes('SESSION HISTORY')) modules.push('@sessions')
-  if (systemPrompt.includes('FUELING STRATEGY')) modules.push('@fueling')
-  if (systemPrompt.includes('HEALTH & INJURY')) modules.push('@health')
-  return modules
+  return {
+    prompt: sections.join('\n\n'),
+    modulesLoaded,
+  }
 }

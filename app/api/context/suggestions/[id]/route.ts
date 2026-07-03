@@ -2,12 +2,27 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-function parseValue(value: string): unknown {
+// Tables that can be targeted by context suggestions
+const ALLOWED_TABLES = new Set([
+  'plan_dna', 'training_patterns', 'adaptation_rules', 'race_goals',
+  'fueling_strategy', 'illnesses', 'injuries', 'recovery_preferences', 'session_notes',
+])
+
+// What "archive" means per module (column(s) to set)
+const ARCHIVE_FIELDS: Record<string, Record<string, unknown>> = {
+  illnesses:         { date_cleared: '' },   // filled with today's date at apply time
+  injuries:          { date_cleared: '' },
+  training_patterns: { status: 'archived' },
+  adaptation_rules:  { enabled: false },
+  race_goals:        { status: 'completed' },
+}
+
+function parseFields(value: string): Record<string, unknown> {
   try {
-    return JSON.parse(value)
-  } catch {
-    return value
-  }
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
+  } catch { /* fall through */ }
+  return {}
 }
 
 export async function PATCH(
@@ -26,7 +41,6 @@ export async function PATCH(
 
   const admin = createAdminClient()
 
-  // Fetch and verify ownership
   const { data: suggestion, error: fetchError } = await admin
     .from('context_suggestions')
     .select('*')
@@ -48,180 +62,102 @@ export async function PATCH(
     return NextResponse.json({ success: true })
   }
 
-  // accept or edit
   const resolvedValue = editedValue ?? (s.suggested_value as string)
 
-  // Apply the change to the target table
   const targetModule = s.target_module as string
   const actionType = s.action_type as string
-  const targetField = s.target_field as string | null
+  const targetId = s.target_field as string | null  // real DB uuid for update/archive/delete
   const now = new Date().toISOString()
+  const today = now.split('T')[0]
+
+  if (!ALLOWED_TABLES.has(targetModule)) {
+    return NextResponse.json({ error: 'Invalid target module' }, { status: 400 })
+  }
 
   try {
-    if (actionType === 'append' && targetModule === 'training_patterns') {
-      await admin.from('training_patterns').insert({
-        user_id: user.id,
-        pattern_text: resolvedValue,
-        category: targetField || 'general',
-        confidence: 'low',
-        observation_count: 1,
-        evidence: s.evidence ?? null,
-        source_conversation_id: s.source_conversation_id ?? null,
-        status: 'active',
-        first_observed_date: now,
-        last_observed_date: now,
-      })
-    } else if (actionType === 'append' && targetModule === 'health_injury') {
-      const itemObject = parseValue(resolvedValue) as Record<string, unknown>
-      if (itemObject && typeof itemObject === 'object') {
-        itemObject.id = crypto.randomUUID()
-        const today = new Date().toISOString().split('T')[0]
-        if (targetField === 'illnesses') {
-          itemObject.date_added = today
-          const { data: healthRow } = await admin
-            .from('health_injury')
-            .select('illnesses')
-            .eq('user_id', user.id)
-            .single()
-          const current = (healthRow as Record<string, unknown> | null)?.illnesses
-          const existing = Array.isArray(current) ? current : []
-          await admin
-            .from('health_injury')
-            .update({ illnesses: [...existing, itemObject], updated_at: now })
-            .eq('user_id', user.id)
-        } else {
-          // active_injuries (physical injuries)
-          const { data: healthRow } = await admin
-            .from('health_injury')
-            .select('active_injuries')
-            .eq('user_id', user.id)
-            .single()
-          const current = (healthRow as Record<string, unknown> | null)?.active_injuries
-          const existing = Array.isArray(current) ? current : []
-          await admin
-            .from('health_injury')
-            .update({ active_injuries: [...existing, itemObject], updated_at: now })
-            .eq('user_id', user.id)
-        }
-      }
-    } else if (actionType === 'update_field' && targetField) {
-      const value = parseValue(resolvedValue)
-      await admin
+    if (actionType === 'create') {
+      const fields = parseFields(resolvedValue)
+      const { error } = await admin
         .from(targetModule)
-        .update({ [targetField]: value, updated_at: now })
+        .insert({ ...fields, user_id: user.id, created_at: now, updated_at: now })
+      if (error) throw error
+
+    } else if (actionType === 'update' && targetId) {
+      const fields = parseFields(resolvedValue)
+      const { error } = await admin
+        .from(targetModule)
+        .update({ ...fields, updated_at: now })
+        .eq('id', targetId)
         .eq('user_id', user.id)
-    } else if (actionType === 'archive' && targetModule === 'training_patterns') {
-      const targetRecordId = s.target_record_id as string | null
-      if (targetRecordId) {
-        await admin
-          .from('training_patterns')
-          .update({ status: 'archived', updated_at: now })
-          .eq('id', targetRecordId)
-          .eq('user_id', user.id)
-      }
-    } else if (actionType === 'archive' && targetModule === 'health_injury') {
-      const illnessMatch = targetField?.match(/^illness_(\d+)$/)
-      const injuryMatch = targetField?.match(/^active_injury_(\d+)$/)
-      const today = now.split('T')[0]
+      if (error) throw error
 
-      if (illnessMatch) {
-        const idx = parseInt(illnessMatch[1], 10)
-        const { data: healthRow } = await admin.from('health_injury').select('illnesses').eq('user_id', user.id).single()
-        const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.illnesses)
-          ? (healthRow as Record<string, unknown>).illnesses as Record<string, unknown>[]
-          : []
-        const target = arr[idx]
-        if (target && !target.date_cleared) {
-          const updated = arr.map((il, i) => i === idx ? { ...il, date_cleared: today, cleared_note: resolvedValue } : il)
-          await admin.from('health_injury').update({ illnesses: updated, updated_at: now }).eq('user_id', user.id)
+    } else if (actionType === 'archive' && targetId) {
+      const archiveTemplate = ARCHIVE_FIELDS[targetModule]
+      const archivePayload: Record<string, unknown> = archiveTemplate
+        ? { ...archiveTemplate, updated_at: now }
+        : { status: 'archived', updated_at: now }
+
+      // Fill in the date for illnesses/injuries
+      if (archivePayload.date_cleared === '') archivePayload.date_cleared = today
+
+      // Carry the cleared_note from the resolved value (the reasoning text)
+      if (targetModule === 'illnesses' || targetModule === 'injuries') {
+        archivePayload.cleared_note = resolvedValue || (s.reasoning as string ?? '')
+      }
+
+      const { error } = await admin
+        .from(targetModule)
+        .update(archivePayload)
+        .eq('id', targetId)
+        .eq('user_id', user.id)
+      if (error) throw error
+
+      // Write to injury_history when archiving an illness or injury
+      if (targetModule === 'illnesses' || targetModule === 'injuries') {
+        const { data: row } = await admin
+          .from(targetModule)
+          .select('*')
+          .eq('id', targetId)
+          .single()
+        if (row) {
+          const r = row as Record<string, unknown>
           await admin.from('injury_history').insert({
             user_id: user.id,
-            body_part: 'general',
-            description: `${target.name ?? 'Illness'} — ${target.description ?? ''}`,
-            date_start: target.date_start ?? today,
+            body_part: targetModule === 'injuries' ? (r.body_part ?? 'general') : 'general',
+            description: targetModule === 'illnesses'
+              ? `${r.name ?? 'Illness'} — ${r.description ?? ''}`
+              : (r.description ?? ''),
+            date_start: r.date_start ?? today,
             date_resolved: today,
-            resolution: resolvedValue,
-            source: 'ai_conversation',
-            source_conversation_id: s.source_conversation_id ?? null,
-          })
-        }
-      } else if (injuryMatch) {
-        const idx = parseInt(injuryMatch[1], 10)
-        const { data: healthRow } = await admin.from('health_injury').select('active_injuries').eq('user_id', user.id).single()
-        const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.active_injuries)
-          ? (healthRow as Record<string, unknown>).active_injuries as Record<string, unknown>[]
-          : []
-        const target = arr[idx]
-        if (target && !target.date_cleared) {
-          const updated = arr.map((inj, i) => i === idx ? { ...inj, date_cleared: today, cleared_note: resolvedValue } : inj)
-          await admin.from('health_injury').update({ active_injuries: updated, updated_at: now }).eq('user_id', user.id)
-          await admin.from('injury_history').insert({
-            user_id: user.id,
-            body_part: (target.body_part as string) ?? 'general',
-            description: (target.description as string) ?? '',
-            date_start: (target.date_start as string) ?? today,
-            date_resolved: today,
-            resolution: resolvedValue,
+            resolution: resolvedValue || (s.reasoning as string ?? ''),
             source: 'ai_conversation',
             source_conversation_id: s.source_conversation_id ?? null,
           })
         }
       }
-    } else if (actionType === 'supersede' && targetModule === 'training_patterns') {
-      await admin.from('training_patterns').insert({
-        user_id: user.id,
-        pattern_text: resolvedValue,
-        category: 'general',
-        confidence: 'low',
-        observation_count: 1,
-        evidence: s.evidence ?? null,
-        source_conversation_id: s.source_conversation_id ?? null,
-        status: 'active',
-        first_observed_date: now,
-        last_observed_date: now,
-      })
-      if (targetField) {
-        await admin
-          .from('training_patterns')
-          .update({ status: 'superseded', updated_at: now })
-          .eq('id', targetField)
-          .eq('user_id', user.id)
-      }
-    } else if (actionType === 'remove') {
-      if (targetModule === 'training_patterns' && targetField) {
-        await admin.from('training_patterns').delete().eq('id', targetField).eq('user_id', user.id)
-      } else if (targetModule === 'health_injury') {
-        const illnessMatch = targetField?.match(/^illness_(\d+)$/)
-        const injuryMatch = targetField?.match(/^active_injury_(\d+)$/)
 
-        if (illnessMatch) {
-          const idx = parseInt(illnessMatch[1], 10)
-          const { data: healthRow } = await admin.from('health_injury').select('illnesses').eq('user_id', user.id).single()
-          const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.illnesses)
-            ? (healthRow as Record<string, unknown>).illnesses as unknown[]
-            : []
-          await admin.from('health_injury').update({ illnesses: arr.filter((_, i) => i !== idx), updated_at: now }).eq('user_id', user.id)
-        } else if (injuryMatch) {
-          const idx = parseInt(injuryMatch[1], 10)
-          const { data: healthRow } = await admin.from('health_injury').select('active_injuries').eq('user_id', user.id).single()
-          const arr = Array.isArray((healthRow as Record<string, unknown> | null)?.active_injuries)
-            ? (healthRow as Record<string, unknown>).active_injuries as unknown[]
-            : []
-          await admin.from('health_injury').update({ active_injuries: arr.filter((_, i) => i !== idx), updated_at: now }).eq('user_id', user.id)
-        }
-      }
+    } else if (actionType === 'delete' && targetId) {
+      const { error } = await admin
+        .from(targetModule)
+        .delete()
+        .eq('id', targetId)
+        .eq('user_id', user.id)
+      if (error) throw error
+
+    } else {
+      // Unknown action or missing targetId where required
+      console.warn('[suggestions] unhandled actionType:', actionType, 'targetId:', targetId)
     }
   } catch (err) {
     console.error('[context/suggestions] apply error:', err)
     return NextResponse.json({ error: 'Failed to apply suggestion' }, { status: 500 })
   }
 
-  // Mark suggestion as resolved
   await admin
     .from('context_suggestions')
     .update({
       status: action === 'edit' ? 'edited' : 'accepted',
-      resolved_at: new Date().toISOString(),
+      resolved_at: now,
       resolved_value: resolvedValue,
     })
     .eq('id', id)

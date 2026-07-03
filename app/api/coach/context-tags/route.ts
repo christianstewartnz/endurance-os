@@ -34,7 +34,8 @@ export async function GET() {
     patternsRes,
     rulesRes,
     racesRes,
-    healthRes,
+    illnessesRes,
+    injuriesRes,
     fuelingRes,
     recoveryRes,
     wellnessRes,
@@ -45,7 +46,8 @@ export async function GET() {
     admin.from('training_patterns').select('id').eq('user_id', uid).eq('status', 'active'),
     admin.from('adaptation_rules').select('id').eq('user_id', uid).eq('enabled', true),
     admin.from('race_goals').select('race_name, race_date').eq('user_id', uid).eq('status', 'upcoming').order('race_date', { ascending: true }),
-    admin.from('health_injury').select('active_injuries, illnesses').eq('user_id', uid).maybeSingle(),
+    admin.from('illnesses').select('id').eq('user_id', uid).is('date_cleared', null),
+    admin.from('injuries').select('id').eq('user_id', uid).is('date_cleared', null),
     admin.from('fueling_strategy').select('user_id').eq('user_id', uid).maybeSingle(),
     admin.from('recovery_preferences').select('user_id').eq('user_id', uid).maybeSingle(),
     admin.from('wellness_cache').select('hrv_rmssd, hrv_delta_14d_percent, tsb').eq('user_id', uid).eq('date', today).maybeSingle(),
@@ -99,11 +101,9 @@ export async function GET() {
     })
   }
 
-  const activeInjuries = healthRes.data?.active_injuries
-  const illnesses = healthRes.data?.illnesses
   const hasHealth =
-    (Array.isArray(activeInjuries) && activeInjuries.length > 0) ||
-    (Array.isArray(illnesses) && illnesses.length > 0)
+    (illnessesRes.data?.length ?? 0) > 0 ||
+    (injuriesRes.data?.length ?? 0) > 0
   if (hasHealth) {
     tags.push({
       tag: '@health',
