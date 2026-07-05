@@ -50,6 +50,14 @@ export function createIntervalsClient(apiKey: string, athleteId: string) {
     return res.json() as Promise<T>
   }
 
+  async function del(path: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}${path}`, { method: 'DELETE', headers })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new IntervalsApiError(res.status, `DELETE ${path} failed: ${res.statusText} ${text}`)
+    }
+  }
+
   return {
     getWellness(oldest: string, newest: string): Promise<IntervalWellness[]> {
       return get<IntervalWellness[]>(
@@ -86,11 +94,8 @@ export function createIntervalsClient(apiKey: string, athleteId: string) {
       )
     },
 
-    deleteEvents(externalIds: string[]): Promise<void> {
-      return put<void>(
-        `/api/v1/athlete/${athleteId}/events/bulk-delete`,
-        externalIds
-      )
+    deleteEventById(eventId: number): Promise<void> {
+      return del(`/api/v1/athlete/${athleteId}/events/${eventId}`)
     },
 
     getPowerCurves(curves: string = 'all'): Promise<unknown> {

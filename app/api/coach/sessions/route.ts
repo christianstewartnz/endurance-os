@@ -122,7 +122,11 @@ export async function DELETE(req: NextRequest) {
         userData.intervals_api_key as string,
         userData.intervals_athlete_id as string,
       )
-      await client.deleteEvents([externalId])
+      const events = await client.getCalendarEvents(date, date)
+      const target = events.find((e) => e.external_id === externalId)
+      if (target?.id) {
+        await client.deleteEventById(target.id)
+      }
     } catch (err) {
       console.error('[coach/sessions] Intervals delete failed:', err)
     }
