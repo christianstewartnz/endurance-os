@@ -13,6 +13,8 @@ function isValidUUID(str: string | undefined): str is string {
 
 // ── Tool schemas ─────────────────────────────────────────────────────────────
 
+import type { WeeklySummaryData, SessionReviewData } from '@/lib/types/coach-widgets'
+
 interface FuelingSuggestion {
   carb_g_per_hour?: number | null
   fluid_ml_per_hour?: number | null
@@ -30,6 +32,19 @@ interface ProposeSessionInput {
   estimated_tss: number
   intervals_format: string
   fueling_suggestion?: FuelingSuggestion | null
+}
+
+const REMOVE_SESSION_TOOL = {
+  name: 'remove_session',
+  description: 'Propose removing an AI-created planned session from the athlete\'s calendar. Only call this when the athlete explicitly asks to cancel or remove a session you created. The athlete must confirm before anything is deleted.',
+  input_schema: {
+    type: 'object',
+    required: ['date', 'name'],
+    properties: {
+      date: { type: 'string', description: 'ISO date (YYYY-MM-DD) of the session to remove' },
+      name: { type: 'string', description: 'Session name, shown in the confirmation prompt' },
+    },
+  },
 }
 
 const PROPOSE_SESSION_TOOL = {
@@ -95,6 +110,54 @@ const PROPOSE_CONTEXT_UPDATE_TOOL = {
   },
 }
 
+const PRESENT_WEEKLY_SUMMARY_TOOL = {
+  name: 'present_weekly_summary',
+  description: 'Render a structured weekly training summary widget in the chat. Call this instead of writing the summary as prose/markdown text whenever reviewing a week\'s training. Do not also duplicate the summary as prose text alongside this tool call.',
+  input_schema: {
+    type: 'object',
+    required: ['week_start', 'week_end', 'days', 'weekly_tss', 'session_count', 'bottom_line'],
+    properties: {
+      week_start: { type: 'string' },
+      week_end: { type: 'string' },
+      days: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            date: { type: 'string' },
+            day_label: { type: 'string', description: "e.g. 'Mon'" },
+            session_name: { type: 'string', description: 'null/omit for rest days' },
+            sport: { type: 'string' },
+            duration_minutes: { type: 'number' },
+            tss: { type: 'number' },
+            intensity_factor: { type: 'number' },
+          },
+        },
+      },
+      weekly_tss: { type: 'number' },
+      session_count: { type: 'integer' },
+      went_well: { type: 'array', items: { type: 'string' } },
+      flags: { type: 'array', items: { type: 'string' } },
+      bottom_line: { type: 'string' },
+      closing_question: { type: 'string', description: 'Optional follow-up question to the athlete' },
+    },
+  },
+}
+
+const PRESENT_SESSION_REVIEW_TOOL = {
+  name: 'present_session_review',
+  description: 'Render a structured session review card in the chat. Call this as your opening review of a completed session — do not also write the same analysis as prose text. You may still call propose_context_update afterward to save the ai_summary and ai_flags.',
+  input_schema: {
+    type: 'object',
+    required: ['headline', 'analysis', 'flags'],
+    properties: {
+      headline: { type: 'string', description: "One-line take, e.g. 'Solid aerobic execution, slight fade in the last 20 minutes'" },
+      analysis: { type: 'string', description: '2-4 sentences on pacing, HR response, drift, execution' },
+      flags: { type: 'array', items: { type: 'string' }, description: 'Notable concerns. Empty array if none.' },
+    },
+  },
+}
+
 // ── Two-tier routing ─────────────────────────────────────────────────────────
 
 // These modules go directly to auto-apply (no review step)
@@ -103,6 +166,11 @@ const AUTO_APPLY_MODULES = new Set(['session_notes', 'session'])
 // training_patterns with kind=observation also auto-apply
 // fueling_strategy → kept in review for now (low-stakes but product decision pending)
 // REVIEW_REQUIRED modules: illnesses, injuries, plan_dna, adaptation_rules, recovery_preferences
+
+interface RemoveSessionInput {
+  date: string
+  name: string
+}
 
 interface ProposeContextUpdateInput {
   target_module: string
@@ -193,14 +261,16 @@ export async function POST(req: NextRequest) {
     conversationId,
     contextType = 'general',
     sessionId,
+    clientDate,
   }: {
     messages: ChatMessage[]
     conversationId?: string
     contextType?: 'general' | 'session_review' | 'session_creation' | 'injury'
     sessionId?: string
+    clientDate?: string
   } = body
 
-  const { prompt: basePrompt, modulesLoaded } = await buildSystemPrompt(user.id)
+  const { prompt: basePrompt, modulesLoaded } = await buildSystemPrompt(user.id, clientDate)
   const maxTokens = contextType === 'session_creation' ? 2048 : 1024
   let systemPrompt = basePrompt
 
@@ -230,7 +300,7 @@ Actuals (from Intervals.icu):
   RPE: ${s.rpe ?? '—'}
 
 Your task for this review:
-  1. Open with an unprompted analysis — pacing, HR response, drift, execution
+  1. Open by calling present_session_review with headline, analysis (pacing/HR/drift/execution), and any flags — do NOT write the same analysis as prose text alongside the tool call.
   2. Ask how it felt (capture RPE and athlete notes)
   3. Note any patterns worth saving to Training Patterns
   4. At end of review, call propose_context_update to save ai_summary and ai_flags to session_notes
@@ -253,7 +323,7 @@ Your task for this review:
     max_tokens: maxTokens,
     stream: true,
     system: systemPrompt,
-    tools: [PROPOSE_CONTEXT_UPDATE_TOOL, PROPOSE_SESSION_TOOL],
+    tools: [PROPOSE_CONTEXT_UPDATE_TOOL, PROPOSE_SESSION_TOOL, REMOVE_SESSION_TOOL, PRESENT_WEEKLY_SUMMARY_TOOL, PRESENT_SESSION_REVIEW_TOOL],
     messages,
   }
 
@@ -294,6 +364,9 @@ Your task for this review:
   const toolBlocks: Record<number, { id: string; name: string; partialJson: string }> = {}
   const completedToolCalls: ProposeContextUpdateInput[] = []
   let proposedSession: ProposeSessionInput | null = null
+  let proposedRemoval: RemoveSessionInput | null = null
+  let weeklySummary: WeeklySummaryData | null = null
+  let sessionReview: SessionReviewData | null = null
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -351,6 +424,24 @@ Your task for this review:
                       proposedSession = JSON.parse(block.partialJson) as ProposeSessionInput
                     } catch {
                       console.error('[chat] failed to parse propose_session input:', block.partialJson)
+                    }
+                  } else if (block.name === 'remove_session') {
+                    try {
+                      proposedRemoval = JSON.parse(block.partialJson) as RemoveSessionInput
+                    } catch {
+                      console.error('[chat] failed to parse remove_session input:', block.partialJson)
+                    }
+                  } else if (block.name === 'present_weekly_summary') {
+                    try {
+                      weeklySummary = JSON.parse(block.partialJson) as WeeklySummaryData
+                    } catch {
+                      console.error('[chat] failed to parse present_weekly_summary input:', block.partialJson)
+                    }
+                  } else if (block.name === 'present_session_review') {
+                    try {
+                      sessionReview = JSON.parse(block.partialJson) as SessionReviewData
+                    } catch {
+                      console.error('[chat] failed to parse present_session_review input:', block.partialJson)
                     }
                   }
                 }
@@ -588,6 +679,9 @@ Your task for this review:
         newSuggestionIds,
         autoApplied,
         ...(proposedSession ? { proposedSession } : {}),
+        ...(proposedRemoval ? { proposedRemoval } : {}),
+        ...(weeklySummary ? { weeklySummary } : {}),
+        ...(sessionReview ? { sessionReview } : {}),
       })}\n\n`
       controller.enqueue(new TextEncoder().encode(metaEvent))
       controller.close()

@@ -95,3 +95,43 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ success: true, eventId, externalId })
 }
+
+export async function DELETE(req: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const body = await req.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
+
+  const { date }: { date: string } = body
+  if (!date) return NextResponse.json({ error: 'date is required' }, { status: 400 })
+
+  const admin = createAdminClient()
+  const { data: userData } = await admin
+    .from('users')
+    .select('intervals_api_key, intervals_athlete_id')
+    .eq('id', user.id)
+    .single()
+
+  const externalId = `endurance-os-ai-${date}-${user.id.slice(0, 8)}`
+
+  if (userData?.intervals_api_key && userData?.intervals_athlete_id) {
+    try {
+      const client = createIntervalsClient(
+        userData.intervals_api_key as string,
+        userData.intervals_athlete_id as string,
+      )
+      await client.deleteEvents([externalId])
+    } catch (err) {
+      console.error('[coach/sessions] Intervals delete failed:', err)
+    }
+  }
+
+  await admin.from('session_notes')
+    .delete()
+    .eq('user_id', user.id)
+    .eq('session_id', externalId)
+
+  return NextResponse.json({ success: true })
+}

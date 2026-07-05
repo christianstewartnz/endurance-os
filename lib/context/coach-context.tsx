@@ -18,6 +18,9 @@ export interface Message {
   content: string
   modulesRead?: string[]
   proposal?: import('@/lib/hooks/use-coach-chat').ProposeSessionInput
+  proposalRemoval?: import('@/lib/hooks/use-coach-chat').ProposeRemovalInput
+  weeklySummary?: import('@/lib/hooks/use-coach-chat').WeeklySummaryData | null
+  sessionReview?: import('@/lib/hooks/use-coach-chat').SessionReviewData | null
 }
 
 export interface ResumedConversation {

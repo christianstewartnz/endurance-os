@@ -1,12 +1,20 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
+import type { WeeklySummaryData, SessionReviewData } from '@/lib/types/coach-widgets'
+
+export type { WeeklySummaryData, SessionReviewData }
 
 export interface FuelingSuggestion {
   carb_g_per_hour?: number | null
   fluid_ml_per_hour?: number | null
   sodium_mg_per_hour?: number | null
   note?: string | null
+}
+
+export interface ProposeRemovalInput {
+  date: string
+  name: string
 }
 
 export interface ProposeSessionInput {
@@ -26,6 +34,9 @@ export interface StreamResult {
   modulesLoaded: string[]
   newSuggestionIds: string[]
   proposedSession: ProposeSessionInput | null
+  proposedRemoval: ProposeRemovalInput | null
+  weeklySummary: WeeklySummaryData | null
+  sessionReview: SessionReviewData | null
 }
 
 export interface StreamCallbacks {
@@ -72,6 +83,7 @@ export function useCoachChat() {
           ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
           contextType: opts.contextType ?? 'general',
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+          clientDate: new Date().toLocaleDateString('en-CA'),
         }),
         signal: abort.signal,
       })
@@ -90,6 +102,9 @@ export function useCoachChat() {
         modulesLoaded?: string[]
         newSuggestionIds?: string[]
         proposedSession?: ProposeSessionInput
+        proposedRemoval?: ProposeRemovalInput
+        weeklySummary?: WeeklySummaryData
+        sessionReview?: SessionReviewData
       } | null = null
 
       while (true) {
@@ -111,6 +126,9 @@ export function useCoachChat() {
               modulesLoaded?: string[]
               newSuggestionIds?: string[]
               proposedSession?: ProposeSessionInput
+              proposedRemoval?: ProposeRemovalInput
+              weeklySummary?: WeeklySummaryData
+              sessionReview?: SessionReviewData
             }
             if (parsed.type === 'endurance_meta') {
               enduranceMeta = parsed
@@ -128,6 +146,9 @@ export function useCoachChat() {
         modulesLoaded: enduranceMeta?.modulesLoaded ?? [],
         newSuggestionIds: enduranceMeta?.newSuggestionIds ?? [],
         proposedSession: enduranceMeta?.proposedSession ?? null,
+        proposedRemoval: enduranceMeta?.proposedRemoval ?? null,
+        weeklySummary: enduranceMeta?.weeklySummary ?? null,
+        sessionReview: enduranceMeta?.sessionReview ?? null,
       }))
     } catch (err) {
       if ((err as Error).name === 'AbortError') return

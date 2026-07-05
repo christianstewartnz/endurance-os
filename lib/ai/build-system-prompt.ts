@@ -610,6 +610,10 @@ Never tell the athlete you've "saved" or "noted" something without calling this 
 
 Session proposals: once you and the athlete have agreed on a specific session, call propose_session with the date you actually discussed — not today's date by default. Calling the tool presents the session for the athlete's confirmation; nothing is written to the calendar until they confirm.
 
+Weekly summaries: whenever the athlete asks to review their week or you are summarising a week of training, call present_weekly_summary to render a structured widget. Do not also write the same content as prose/markdown text in your reply — the widget replaces the prose, not supplements it. You may add a brief sentence before or after the tool call if context is needed.
+
+Session reviews: when opening a session review, call present_session_review first. Do not duplicate the headline/analysis as prose text alongside the tool call.
+
 ════════════════════════════════════════
 END OF CONTEXT
 ════════════════════════════════════════`
@@ -620,11 +624,12 @@ export interface BuildSystemPromptResult {
   modulesLoaded: string[]
 }
 
-export async function buildSystemPrompt(userId: string): Promise<BuildSystemPromptResult> {
+export async function buildSystemPrompt(userId: string, clientToday?: string): Promise<BuildSystemPromptResult> {
   const admin = createAdminClient()
-  const today = todayStr()
+  const today = clientToday ?? todayStr()
   const ago28 = daysAgoStr(28)
   const ago14 = daysAgoStr(14)
+  const todayFormatted = parseDateLocal(today).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
 
   const [
     profileRes,
@@ -722,7 +727,7 @@ export async function buildSystemPrompt(userId: string): Promise<BuildSystemProm
   if (forecast) modulesLoaded.push('weather')
 
   const sections = [
-    'You are an expert endurance coach embedded in Endurance.OS, an AI-native training intelligence platform. You have full access to this athlete\'s training context, history, and readiness data. Use it to give specific, evidence-based coaching — not generic advice.',
+    `You are an expert endurance coach embedded in Endurance.OS, an AI-native training intelligence platform. You have full access to this athlete's training context, history, and readiness data. Use it to give specific, evidence-based coaching — not generic advice.\n\nToday's date: ${todayFormatted}.`,
     buildCoachInstructions(style),
     buildAthleteLayer(profile, effectiveFtp, effectivePace, effectiveCss),
     buildPlanLayer(plan),

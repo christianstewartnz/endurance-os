@@ -1,11 +1,15 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Icon, Button, Kbd } from '@/components/atoms'
 import { useRouter } from 'next/navigation'
 import { useCoach } from '@/lib/context/coach-context'
 import { useCoachChat } from '@/lib/hooks/use-coach-chat'
-import { SessionProposalCard } from '@/components/session-proposal-card'
+import { SessionProposalCard, SessionRemoveCard } from '@/components/session-proposal-card'
+import { WeeklySummaryWidget } from '@/components/weekly-summary-widget'
+import { SessionReviewCard } from '@/components/session-review-card'
 import type { Message, ResumedConversation, ContextTag } from '@/lib/context/coach-context'
 
 interface ContextSuggestion {
@@ -112,8 +116,8 @@ export default function CoachPanel() {
   const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat')
   const [input, setInput] = useState('')
   const [inlineCards, setInlineCards] = useState<InlineCard[]>([])
-  const [addedSessionMsgIds, setAddedSessionMsgIds] = useState<Set<string>>(new Set())
   const [addingSessionMsgId, setAddingSessionMsgId] = useState<string | null>(null)
+  const [removingSessionMsgId, setRemovingSessionMsgId] = useState<string | null>(null)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -171,7 +175,6 @@ export default function CoachPanel() {
     abort()
     contextStartNew()
     setInlineCards([])
-    setAddedSessionMsgIds(new Set())
     setInput('')
     setActiveTab('chat')
   }
@@ -304,9 +307,17 @@ export default function CoachPanel() {
         onTextDelta: (delta) => {
           setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: m.content + delta } : m))
         },
-        onComplete: async ({ fullText, modulesLoaded, newSuggestionIds, proposedSession }) => {
+        onComplete: async ({ fullText, modulesLoaded, newSuggestionIds, proposedSession, proposedRemoval, weeklySummary, sessionReview }) => {
           setMessages((prev) => prev.map((m) => m.id === aiMsgId
-            ? { ...m, content: fullText, modulesRead: modulesLoaded, ...(proposedSession ? { proposal: proposedSession } : {}) }
+            ? {
+                ...m,
+                content: fullText,
+                modulesRead: modulesLoaded,
+                ...(proposedSession ? { proposal: proposedSession } : {}),
+                ...(proposedRemoval ? { proposalRemoval: proposedRemoval } : {}),
+                ...(weeklySummary ? { weeklySummary } : {}),
+                ...(sessionReview ? { sessionReview } : {}),
+              }
             : m
           ))
 
@@ -504,6 +515,16 @@ export default function CoachPanel() {
             {messages.map((m, i) => (
               <div key={m.id}>
                 <ChatMessage m={m} isStreaming={isStreaming && i === messages.length - 1 && m.role === 'ai'} />
+                {m.role === 'ai' && m.weeklySummary && (
+                  <div style={{ marginTop: 8, paddingLeft: 32 }}>
+                    <WeeklySummaryWidget data={m.weeklySummary} />
+                  </div>
+                )}
+                {m.role === 'ai' && m.sessionReview && (
+                  <div style={{ marginTop: 8, paddingLeft: 32 }}>
+                    <SessionReviewCard data={m.sessionReview} />
+                  </div>
+                )}
                 {inlineCards
                   .filter((c) => c.messageId === m.id)
                   .map((card) => (
@@ -518,24 +539,49 @@ export default function CoachPanel() {
                     />
                   ))
                 }
-                {m.proposal && !addedSessionMsgIds.has(m.id) && (
+                {m.proposal && (
                   <SessionProposalCard
                     proposal={m.proposal}
                     adding={addingSessionMsgId === m.id}
                     onAdd={async (date) => {
-                      setAddingSessionMsgId(m.id)
+                      const msgId = m.id
+                      setAddingSessionMsgId(msgId)
                       try {
                         await fetch('/api/coach/sessions', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ proposal: m.proposal, date }),
                         })
-                        setAddedSessionMsgIds((prev) => new Set([...prev, m.id]))
+                        setMessages((prev) => prev.map((msg) => msg.id === msgId ? { ...msg, proposal: undefined } : msg))
+                        router.refresh()
                       } catch { /* non-fatal */ } finally {
                         setAddingSessionMsgId(null)
                       }
                     }}
-                    onDecline={() => setAddedSessionMsgIds((prev) => new Set([...prev, m.id]))}
+                    onDecline={() => setMessages((prev) => prev.map((msg) => msg.id === m.id ? { ...msg, proposal: undefined } : msg))}
+                  />
+                )}
+                {m.proposalRemoval && (
+                  <SessionRemoveCard
+                    removal={m.proposalRemoval}
+                    confirming={removingSessionMsgId === m.id}
+                    onConfirm={async () => {
+                      const msgId = m.id
+                      const removalDate = m.proposalRemoval!.date
+                      setRemovingSessionMsgId(msgId)
+                      try {
+                        await fetch('/api/coach/sessions', {
+                          method: 'DELETE',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ date: removalDate }),
+                        })
+                        setMessages((prev) => prev.map((msg) => msg.id === msgId ? { ...msg, proposalRemoval: undefined } : msg))
+                        router.refresh()
+                      } catch { /* non-fatal */ } finally {
+                        setRemovingSessionMsgId(null)
+                      }
+                    }}
+                    onCancel={() => setMessages((prev) => prev.map((msg) => msg.id === m.id ? { ...msg, proposalRemoval: undefined } : msg))}
                   />
                 )}
               </div>
@@ -880,6 +926,34 @@ function ConversationRow({
   )
 }
 
+const markdownComponents: React.ComponentProps<typeof ReactMarkdown>['components'] = {
+  p: ({ children }) => <p style={{ margin: '0 0 6px', lineHeight: 1.55 }}>{children}</p>,
+  strong: ({ children }) => <strong style={{ fontWeight: 600, color: 'var(--fg-1)' }}>{children}</strong>,
+  em: ({ children }) => <em style={{ fontStyle: 'italic', color: 'var(--fg-2)' }}>{children}</em>,
+  h1: ({ children }) => <h1 style={{ fontSize: 14, fontWeight: 700, margin: '8px 0 4px', color: 'var(--fg-1)' }}>{children}</h1>,
+  h2: ({ children }) => <h2 style={{ fontSize: 13, fontWeight: 700, margin: '8px 0 4px', color: 'var(--fg-1)' }}>{children}</h2>,
+  h3: ({ children }) => <h3 style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 3px', color: 'var(--fg-1)' }}>{children}</h3>,
+  ul: ({ children }) => <ul style={{ margin: '4px 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ margin: '4px 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</ol>,
+  li: ({ children }) => <li style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.5 }}>{children}</li>,
+  code: ({ children, className }) => {
+    const isBlock = className?.startsWith('language-')
+    return isBlock
+      ? <code style={{ display: 'block', background: 'var(--bg-3)', border: '1px solid var(--border-subtle)', borderRadius: 5, padding: '8px 10px', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-1)', overflowX: 'auto', margin: '4px 0' }}>{children}</code>
+      : <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: 'var(--bg-3)', borderRadius: 3, padding: '1px 4px', color: 'var(--fg-1)' }}>{children}</code>
+  },
+  table: ({ children }) => (
+    <div style={{ overflowX: 'auto', margin: '6px 0' }}>
+      <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead style={{ borderBottom: '1px solid var(--border-default)' }}>{children}</thead>,
+  th: ({ children }) => <th style={{ padding: '4px 10px', textAlign: 'left', fontWeight: 600, color: 'var(--fg-3)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{children}</th>,
+  td: ({ children }) => <td style={{ padding: '4px 10px', borderBottom: '1px solid var(--border-subtle)', color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{children}</td>,
+  blockquote: ({ children }) => <blockquote style={{ borderLeft: '3px solid var(--border-default)', margin: '4px 0', paddingLeft: 10, color: 'var(--fg-3)' }}>{children}</blockquote>,
+  hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '8px 0' }} />,
+}
+
 function ChatMessage({ m, isStreaming }: { m: Message; isStreaming: boolean }) {
   if (m.role === 'system') {
     return (
@@ -916,14 +990,18 @@ function ChatMessage({ m, isStreaming }: { m: Message; isStreaming: boolean }) {
           <TypingDots />
         ) : (
           <>
-            <div style={{
-              background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)',
-              borderRadius: 10, padding: '10px 12px',
-              fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap',
-            }}>
-              {m.content}
-              {isStreaming && <span style={{ opacity: 0.5, animation: 'blink 1s infinite' }}>▊</span>}
-            </div>
+            {m.content && (
+              <div style={{
+                background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)',
+                borderRadius: 10, padding: '10px 12px',
+                fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55,
+              }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                  {m.content}
+                </ReactMarkdown>
+                {isStreaming && <span style={{ opacity: 0.5, animation: 'blink 1s infinite' }}>▊</span>}
+              </div>
+            )}
             {m.modulesRead && m.modulesRead.length > 0 && !isStreaming && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5 }}>
                 {m.modulesRead.map((mod) => (

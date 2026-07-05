@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useRouter } from 'next/navigation'
 import { Icon, Button, Pill, Sparkline } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
@@ -163,7 +165,7 @@ export default function DashboardView({
       {showSessionModal && (
         <SessionCreationModal
           onClose={() => setShowSessionModal(false)}
-          onSessionAdded={() => { setSessionCreated(true); setShowSessionModal(false) }}
+          onSessionAdded={() => { setSessionCreated(true); setShowSessionModal(false); router.refresh() }}
         />
       )}
       <ReadinessRow
@@ -550,8 +552,17 @@ function SessionCreationModal({ onClose, onSessionAdded }: SessionCreationModalP
                       <ModalTypingDots />
                     ) : (
                       <>
-                        <div style={{ background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-                          {m.content}
+                        <div style={{ background: 'rgba(139,124,246,0.06)', border: '1px solid rgba(139,124,246,0.16)', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.55 }}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                            p: ({ children }) => <p style={{ margin: '0 0 6px', lineHeight: 1.55 }}>{children}</p>,
+                            strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+                            ul: ({ children }) => <ul style={{ margin: '4px 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</ul>,
+                            ol: ({ children }) => <ol style={{ margin: '4px 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</ol>,
+                            li: ({ children }) => <li style={{ fontSize: 13, lineHeight: 1.5 }}>{children}</li>,
+                            code: ({ children }) => <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: 'var(--bg-3)', borderRadius: 3, padding: '1px 4px' }}>{children}</code>,
+                          }}>
+                            {m.content}
+                          </ReactMarkdown>
                           {isStreaming && i === messages.length - 1 && <span style={{ opacity: 0.5 }}>▊</span>}
                         </div>
                         {m.proposal && (

@@ -2,7 +2,9 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/atoms'
-import type { ProposeSessionInput, FuelingSuggestion } from '@/lib/hooks/use-coach-chat'
+import type { ProposeSessionInput, ProposeRemovalInput, FuelingSuggestion } from '@/lib/hooks/use-coach-chat'
+
+export type { ProposeRemovalInput }
 
 interface SessionProposalCardProps {
   proposal: ProposeSessionInput
@@ -42,6 +44,35 @@ function formatDateLabel(d: string): string {
   } catch {
     return d
   }
+}
+
+interface SessionRemoveCardProps {
+  removal: ProposeRemovalInput
+  onConfirm: () => void
+  onCancel: () => void
+  confirming: boolean
+}
+
+export function SessionRemoveCard({ removal, onConfirm, onCancel, confirming }: SessionRemoveCardProps) {
+  return (
+    <div style={{ marginTop: 10, border: '1px solid var(--border-default)', background: 'var(--bg-2)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 6 }}>
+          Remove Session
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 4 }}>{removal.name}</div>
+        <div style={{ fontSize: 12, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+          {formatDateLabel(removal.date)}
+        </div>
+      </div>
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 8 }}>
+        <Button kind="ghost" size="sm" icon="x" onClick={onConfirm}>
+          {confirming ? 'Removing…' : 'Remove from calendar'}
+        </Button>
+        <Button kind="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  )
 }
 
 export function SessionProposalCard({ proposal, onAdd, onDecline, adding }: SessionProposalCardProps) {
