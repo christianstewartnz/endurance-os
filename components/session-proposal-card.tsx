@@ -2,13 +2,37 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/atoms'
-import type { ProposeSessionInput } from '@/lib/hooks/use-coach-chat'
+import type { ProposeSessionInput, FuelingSuggestion } from '@/lib/hooks/use-coach-chat'
 
 interface SessionProposalCardProps {
   proposal: ProposeSessionInput
   onAdd: (date: string) => void
   onDecline: () => void
   adding: boolean
+}
+
+function FuelingBlock({ fueling }: { fueling: FuelingSuggestion }) {
+  const hasTargets = fueling.carb_g_per_hour || fueling.fluid_ml_per_hour || fueling.sodium_mg_per_hour
+  const parts: string[] = []
+  if (fueling.carb_g_per_hour) parts.push(`${fueling.carb_g_per_hour}g carbs/h`)
+  if (fueling.fluid_ml_per_hour) parts.push(`${fueling.fluid_ml_per_hour}ml/h`)
+  if (fueling.sodium_mg_per_hour) parts.push(`${fueling.sodium_mg_per_hour}mg sodium/h`)
+
+  return (
+    <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(139,124,246,0.06)' }}>
+      <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.06em', color: 'var(--ai)', marginBottom: 4 }}>
+        Fueling plan
+      </div>
+      {hasTargets && (
+        <div style={{ fontSize: 12, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', marginBottom: fueling.note ? 4 : 0 }}>
+          {parts.join(' · ')}
+        </div>
+      )}
+      {fueling.note && (
+        <div style={{ fontSize: 11, color: 'var(--fg-3)', lineHeight: 1.5 }}>{fueling.note}</div>
+      )}
+    </div>
+  )
 }
 
 function formatDateLabel(d: string): string {
@@ -46,6 +70,9 @@ export function SessionProposalCard({ proposal, onAdd, onDecline, adding }: Sess
         <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--fg-2)', fontFamily: 'var(--font-mono)', lineHeight: 1.7, whiteSpace: 'pre-wrap' as const }}>
           {proposal.description}
         </div>
+      )}
+      {proposal.fueling_suggestion && (
+        <FuelingBlock fueling={proposal.fueling_suggestion} />
       )}
       <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8 }}>
         <label style={{ fontSize: 12, color: 'var(--fg-3)', flexShrink: 0 }}>Date</label>

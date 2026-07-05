@@ -982,6 +982,15 @@ function WeekStrip({
                       <span>{duration ?? '—'}</span>
                       {tss != null && tss > 0 && <span>{Math.round(tss)} TSS</span>}
                     </div>
+                    {(session.fueling_carb_g_per_hour || session.fueling_fluid_ml_per_hour) && (
+                      <div style={{ fontSize: 9, color: 'var(--ai)', fontFamily: 'var(--font-mono)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {[
+                          session.fueling_carb_g_per_hour ? `${session.fueling_carb_g_per_hour}g/h` : null,
+                          session.fueling_fluid_ml_per_hour ? `${session.fueling_fluid_ml_per_hour}ml/h` : null,
+                          session.fueling_sodium_mg_per_hour ? `${session.fueling_sodium_mg_per_hour}mg Na/h` : null,
+                        ].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div style={{ padding: '8px 10px', background: 'var(--bg-1)', ...activityCardBorder, borderRadius: 6, opacity: isDone ? 0.55 : 1 }}>

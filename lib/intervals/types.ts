@@ -191,4 +191,9 @@ export interface SessionNoteRow {
   athlete_notes?: string | null
   ai_summary?: string | null
   review_conversation_id?: string | null
+  // Fueling suggestion (set when session is proposed by AI)
+  fueling_carb_g_per_hour?: number | null
+  fueling_fluid_ml_per_hour?: number | null
+  fueling_sodium_mg_per_hour?: number | null
+  fueling_note?: string | null
 }

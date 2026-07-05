@@ -18,6 +18,8 @@ const ALLOWED_FIELDS = new Set([
   'overall_goal_time_seconds', 'overall_goal_position',
   'general_notes', 'per_leg_targets',
   'pacing_notes', 'fueling_notes', 'equipment_notes',
+  'race_carb_per_hour_g', 'race_fluid_per_hour_ml',
+  'race_sodium_per_hour_mg', 'race_sodium_hot_mg',
 ])
 
 export async function PUT(
@@ -53,6 +55,12 @@ export async function PUT(
     if (ALLOWED_FIELDS.has(k)) {
       update[k] = v === '' ? null : v
     }
+  }
+
+  // When location changes, invalidate the geocode cache for this race
+  if ('location' in raw) {
+    update.location_lat = null
+    update.location_lon = null
   }
 
   if (Object.keys(update).length === 0) {

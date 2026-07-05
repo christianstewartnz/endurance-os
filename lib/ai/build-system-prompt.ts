@@ -1,4 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { geocodeLocation, getForecastRange } from '@/lib/weather/client'
+import type { WeekForecast } from '@/lib/weather/client'
 
 function localDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -309,12 +311,23 @@ ${r.stretch_goal ? `Stretch: ${r.stretch_goal}\n` : ''}${r.general_notes ? `Note
       if (legLines.length) section += `Leg targets:\n  ${legLines.join('\n  ')}`
     }
 
+    // Race-day fueling numbers (per-race, set on the Races page)
+    const hasRaceFueling = r.race_carb_per_hour_g || r.race_fluid_per_hour_ml || r.race_sodium_per_hour_mg
+    if (hasRaceFueling) {
+      const fuelParts: string[] = []
+      if (r.race_carb_per_hour_g) fuelParts.push(`Carbs: ${r.race_carb_per_hour_g}g/h`)
+      if (r.race_fluid_per_hour_ml) fuelParts.push(`Fluid: ${r.race_fluid_per_hour_ml}ml/h`)
+      if (r.race_sodium_per_hour_mg) fuelParts.push(`Sodium: ${r.race_sodium_per_hour_mg}mg/h`)
+      if (r.race_sodium_hot_mg) fuelParts.push(`Sodium (hot): ${r.race_sodium_hot_mg}mg/h`)
+      section += `\nRace-day fueling: ${fuelParts.join(' · ')}`
+    }
+
     const pacingNotes = r.pacing_notes as Array<{ category: string; note: string }> | null
     const fuelingNotes = r.fueling_notes as Array<{ category: string; note: string }> | null
     const equipmentNotes = r.equipment_notes as Array<{ category: string; note: string }> | null
 
     const pacingStr = buildNotesSection(pacingNotes, ['swim','bike','run','transition','mental','general'], 'Pacing strategy')
-    const fuelingStr = buildNotesSection(fuelingNotes, ['pre_race','bike','run','caffeine','hydration','general'], 'Fueling strategy')
+    const fuelingStr = buildNotesSection(fuelingNotes, ['pre_race','bike','run','caffeine','hydration','general'], 'Fueling notes')
     const equipmentStr = buildNotesSection(equipmentNotes, ['bike','wheels','helmet','wetsuit','shoes','tri_suit','general'], 'Equipment')
 
     if (pacingStr) section += `\n${pacingStr}`
@@ -334,25 +347,22 @@ ${items}`
 function buildFuelingLayer(fueling: Record<string, unknown> | null): string {
   if (!fueling) return ''
 
+  // Race-day fueling numbers now live on individual race_goals rows (see RACE GOALS section above).
+  // This section covers athlete-level preferences that apply regardless of which race.
   return `════════════════════════════════════════
-FUELING STRATEGY
+FUELING STRATEGY (athlete preferences)
 ════════════════════════════════════════
-
-Race day:
-  Carbohydrate: ${fueling.race_carb_per_hour_g ? `${fueling.race_carb_per_hour_g}g/h` : '—'}
-  Fluid: ${fueling.race_fluid_per_hour_ml ? `${fueling.race_fluid_per_hour_ml}ml/h` : '—'}
-  Sodium: ${fueling.race_sodium_per_hour_mg ? `${fueling.race_sodium_per_hour_mg}mg/h standard` : '—'}${fueling.race_sodium_hot_per_hour_mg ? ` · ${fueling.race_sodium_hot_per_hour_mg}mg/h hot` : ''}
-  Caffeine: ${fueling.caffeine_strategy ?? '—'}
 
 Training (long sessions):
   Carbohydrate: ${fueling.training_carb_per_hour_g ? `${fueling.training_carb_per_hour_g}g/h` : '—'}
   ${fueling.bars_allowed_until_mins ? `Bars allowed: first ${fueling.bars_allowed_until_mins}min only · gels after ${fueling.bars_allowed_until_mins}min` : ''}
   ${fueling.gi_notes ? `GI note: ${fueling.gi_notes}` : ''}
+  Caffeine: ${fueling.caffeine_strategy ?? '—'}
 
 Pre-race:
   Meal: ${fueling.pre_race_meal ?? '—'}
   Timing: ${fueling.pre_race_timing_hours ? `T-${fueling.pre_race_timing_hours}h before start` : '—'}
-  ${fueling.heat_threshold_celsius ? `Heat protocol: above ${fueling.heat_threshold_celsius}°C, add ${fueling.heat_fluid_increase_ml ?? 0}ml fluid` : ''}`
+  ${fueling.heat_threshold_celsius ? `Heat protocol: above ${fueling.heat_threshold_celsius}°C` : ''}`
 }
 
 function buildHealthLayer(
@@ -559,6 +569,31 @@ ${items}
 Conversations older than 14 days are archived. If the athlete references an older conversation, respond: "I don't have that in my active window — want me to look it up?" and if yes, fetch that specific conversation summary on demand.`
 }
 
+function buildConditionsLayer(forecast: WeekForecast | null, locationName: string | null): string {
+  if (!forecast || Object.keys(forecast).length === 0) return ''
+
+  const dayOfWeek = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short' })
+  }
+
+  const lines = Object.entries(forecast)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, f]) => {
+      const precip = f.precipitationChance > 0 ? ` · ${f.precipitationChance}% precip` : ''
+      return `  ${date} (${dayOfWeek(date)}): ${f.tempMinC}–${f.tempMaxC}°C${precip}`
+    })
+
+  const location = locationName ? ` — ${locationName}` : ''
+  return `════════════════════════════════════════
+WEATHER CONDITIONS (next 16 days${location})
+════════════════════════════════════════
+
+${lines.join('\n')}
+
+Use these forecasts when proposing sessions or race-day fueling. Sessions with duration >2h or on hot days (>25°C max) warrant higher fluid and sodium targets. Short/easy sessions (<90min, cool conditions) typically need water only — state this explicitly in fueling_suggestion.note rather than leaving it blank.`
+}
+
 function buildContextUpdateInstructions(): string {
   return `════════════════════════════════════════
 CONTEXT UPDATES
@@ -648,6 +683,28 @@ export async function buildSystemPrompt(userId: string): Promise<BuildSystemProm
   const effectivePace = (profile?.threshold_pace_override ?? profile?.threshold_pace_per_km) as number | null
   const effectiveCss = (profile?.threshold_css_override ?? profile?.threshold_css) as number | null
 
+  // Weather: geocode athlete location if needed, then fetch 16-day forecast
+  let forecast: WeekForecast | null = null
+  if (profile) {
+    let lat = profile.location_lat as number | null
+    let lon = profile.location_lon as number | null
+    const locationText = profile.location as string | null
+
+    if ((lat == null || lon == null) && locationText) {
+      const coords = await geocodeLocation(locationText)
+      if (coords) {
+        lat = coords.lat
+        lon = coords.lon
+        // Cache geocode result on athlete_profile
+        await admin.from('athlete_profile').update({ location_lat: lat, location_lon: lon }).eq('user_id', userId)
+      }
+    }
+
+    if (lat != null && lon != null) {
+      forecast = await getForecastRange(lat, lon)
+    }
+  }
+
   // Track which modules were actually loaded with data
   const modulesLoaded: string[] = []
   if (profile) modulesLoaded.push('athlete')
@@ -662,6 +719,7 @@ export async function buildSystemPrompt(userId: string): Promise<BuildSystemProm
   if (todayWellness) modulesLoaded.push('todayshrv')
   if (sessions.length) modulesLoaded.push('sessions')
   if (recentConversations.length) modulesLoaded.push('recentconvs')
+  if (forecast) modulesLoaded.push('weather')
 
   const sections = [
     'You are an expert endurance coach embedded in Endurance.OS, an AI-native training intelligence platform. You have full access to this athlete\'s training context, history, and readiness data. Use it to give specific, evidence-based coaching — not generic advice.',
@@ -676,6 +734,7 @@ export async function buildSystemPrompt(userId: string): Promise<BuildSystemProm
     buildRecoveryLayer(recovery),
     buildReadinessLayer(todayWellness, recentWellness),
     buildSessionHistoryLayer(sessions),
+    buildConditionsLayer(forecast, profile?.location as string | null),
     buildRecentConversationsLayer(recentConversations),
     buildContextUpdateInstructions(),
   ].filter(Boolean)

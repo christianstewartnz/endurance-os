@@ -249,7 +249,7 @@ export default function ContextView({
     }
     let keys: string[]
     if (active.id === 'fueling') {
-      keys = ['race_carb_per_hour_g', 'race_fluid_per_hour_ml', 'race_sodium_per_hour_mg', 'race_sodium_hot_mg', 'training_carb_per_hour_g', 'bars_allowed_until_mins', 'caffeine_strategy', 'pre_race_meal', 'pre_race_timing_hours', 'gi_notes', 'heat_threshold_celsius']
+      keys = ['training_carb_per_hour_g', 'bars_allowed_until_mins', 'caffeine_strategy', 'pre_race_meal', 'pre_race_timing_hours', 'gi_notes', 'heat_threshold_celsius']
     } else if (active.id === 'recovery') {
       keys = ['sleep_target_hours', 'preferred_rest_days', 'hrv_measurement_time', 'hrv_device', 'deload_frequency_weeks', 'deload_load_percent', 'recovery_modalities']
     } else {
@@ -1201,26 +1201,20 @@ function AthleteProfileContent({ data, editing, editFields, onFieldChange, onRef
 // ── Fueling Content ───────────────────────────────────────────────────────────
 
 function FuelingViewContent({ data }: { data: Row | null }) {
-  const hasData = data && (data.race_carb_per_hour_g || data.race_fluid_per_hour_ml || data.training_carb_per_hour_g || data.caffeine_strategy || data.pre_race_meal)
+  const hasData = data && (data.training_carb_per_hour_g || data.caffeine_strategy || data.pre_race_meal)
 
   if (!hasData) {
     return (
       <div style={{ padding: '48px 24px', textAlign: 'center' }}>
         <Icon name="droplets" size={32} color="var(--fg-4)" />
         <div style={{ fontSize: 13, color: 'var(--fg-3)', maxWidth: 320, margin: '12px auto 0', lineHeight: 1.55 }}>
-          Your fueling strategy isn&apos;t set up yet. The Coach will reference this during race planning and long session discussions.
+          Your fueling preferences aren&apos;t set up yet. The Coach will reference this during long session discussions. Race-day fueling targets are set per-race on the Races page.
         </div>
       </div>
     )
   }
 
   const sections: Array<[string, Array<[string, string]>]> = [
-    ['RACE FUELING', [
-      ['Carbohydrate / h', data.race_carb_per_hour_g ? `${data.race_carb_per_hour_g}g` : '—'],
-      ['Fluid / h', data.race_fluid_per_hour_ml ? `${data.race_fluid_per_hour_ml}ml` : '—'],
-      ['Sodium / h', data.race_sodium_per_hour_mg ? `${data.race_sodium_per_hour_mg}mg` : '—'],
-      ['Sodium hot / h', data.race_sodium_hot_mg ? `${data.race_sodium_hot_mg}mg` : '—'],
-    ]],
     ['TRAINING FUELING', [
       ['Carbohydrate / h', data.training_carb_per_hour_g ? `${data.training_carb_per_hour_g}g` : '—'],
       ['Bars until', data.bars_allowed_until_mins ? `${data.bars_allowed_until_mins} min, then gels` : '—'],
@@ -1268,11 +1262,6 @@ function FuelingEditContent({ editFields, onFieldChange }: { editFields: Record<
 
   return (
     <div style={{ padding: '8px 0' }}>
-      <div style={{ padding: '14px 24px 6px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>RACE FUELING</div>
-      {numRow('Carbohydrate', 'race_carb_per_hour_g', 'g/h')}
-      {numRow('Fluid', 'race_fluid_per_hour_ml', 'ml/h')}
-      {numRow('Sodium', 'race_sodium_per_hour_mg', 'mg/h')}
-      {numRow('Sodium (hot)', 'race_sodium_hot_mg', 'mg/h')}
       <div style={{ padding: '14px 24px 6px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--fg-3)' }}>TRAINING FUELING</div>
       {numRow('Carbohydrate', 'training_carb_per_hour_g', 'g/h')}
       {numRow('Bars until', 'bars_allowed_until_mins', 'min then gels')}

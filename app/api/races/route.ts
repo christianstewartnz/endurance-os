@@ -23,6 +23,8 @@ export async function POST(req: NextRequest) {
     race_name, race_date, location, sport, distance_format,
     priority, overall_goal_time_str, overall_goal_position,
     general_notes, per_leg_targets,
+    race_carb_per_hour_g, race_fluid_per_hour_ml,
+    race_sodium_per_hour_mg, race_sodium_hot_mg,
   } = body as Record<string, unknown>
 
   if (!race_name || !race_date) {
@@ -48,6 +50,10 @@ export async function POST(req: NextRequest) {
       overall_goal_position: overall_goal_position ?? null,
       general_notes: general_notes ?? null,
       per_leg_targets: per_leg_targets ?? null,
+      race_carb_per_hour_g: race_carb_per_hour_g ?? null,
+      race_fluid_per_hour_ml: race_fluid_per_hour_ml ?? null,
+      race_sodium_per_hour_mg: race_sodium_per_hour_mg ?? null,
+      race_sodium_hot_mg: race_sodium_hot_mg ?? null,
       status: 'upcoming',
       pacing_notes: [],
       fueling_notes: [],

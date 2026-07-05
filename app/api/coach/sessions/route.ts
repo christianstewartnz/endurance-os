@@ -3,6 +3,13 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createIntervalsClient } from '@/lib/intervals/client'
 
+interface FuelingSuggestion {
+  carb_g_per_hour?: number | null
+  fluid_ml_per_hour?: number | null
+  sodium_mg_per_hour?: number | null
+  note?: string | null
+}
+
 interface SessionProposal {
   name: string
   type: string
@@ -11,6 +18,7 @@ interface SessionProposal {
   duration_seconds: number
   estimated_tss: number
   intervals_format: string
+  fueling_suggestion?: FuelingSuggestion | null
 }
 
 export async function POST(req: NextRequest) {
@@ -60,6 +68,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const fueling = proposal.fueling_suggestion
+  const fuelingFields = fueling ? {
+    fueling_carb_g_per_hour: fueling.carb_g_per_hour ?? null,
+    fueling_fluid_ml_per_hour: fueling.fluid_ml_per_hour ?? null,
+    fueling_sodium_mg_per_hour: fueling.sodium_mg_per_hour ?? null,
+    fueling_note: fueling.note ?? null,
+  } : {}
+
   // Save to session_notes as a planned session
   const { error: insertError } = await admin.from('session_notes').insert({
     user_id: user.id,
@@ -70,6 +86,7 @@ export async function POST(req: NextRequest) {
     planned_tss: proposal.estimated_tss,
     planned_duration_seconds: proposal.duration_seconds,
     is_archived: false,
+    ...fuelingFields,
   })
 
   if (insertError) {

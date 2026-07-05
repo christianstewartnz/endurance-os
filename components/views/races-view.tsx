@@ -39,6 +39,11 @@ export interface RaceGoal {
   fueling_notes: NoteItem[] | null
   equipment_notes: NoteItem[] | null
   general_notes: string | null
+  // Race-day fueling targets (specific to this race)
+  race_carb_per_hour_g: number | null
+  race_fluid_per_hour_ml: number | null
+  race_sodium_per_hour_mg: number | null
+  race_sodium_hot_mg: number | null
 }
 
 export interface ContextSuggestion {
@@ -374,6 +379,10 @@ function RaceDetailModal({
     stretch_goal: race.stretch_goal ?? '',
     general_notes: race.general_notes ?? '',
     status: race.status,
+    race_carb_per_hour_g: race.race_carb_per_hour_g != null ? String(race.race_carb_per_hour_g) : '',
+    race_fluid_per_hour_ml: race.race_fluid_per_hour_ml != null ? String(race.race_fluid_per_hour_ml) : '',
+    race_sodium_per_hour_mg: race.race_sodium_per_hour_mg != null ? String(race.race_sodium_per_hour_mg) : '',
+    race_sodium_hot_mg: race.race_sodium_hot_mg != null ? String(race.race_sodium_hot_mg) : '',
   })
   const [saving, setSaving] = useState(false)
   const [localSuggestions, setLocalSuggestions] = useState(pendingSuggestions)
@@ -412,7 +421,13 @@ function RaceDetailModal({
       const res = await fetch(`/api/races/${race.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editForm),
+        body: JSON.stringify({
+          ...editForm,
+          race_carb_per_hour_g: editForm.race_carb_per_hour_g ? Number(editForm.race_carb_per_hour_g) : null,
+          race_fluid_per_hour_ml: editForm.race_fluid_per_hour_ml ? Number(editForm.race_fluid_per_hour_ml) : null,
+          race_sodium_per_hour_mg: editForm.race_sodium_per_hour_mg ? Number(editForm.race_sodium_per_hour_mg) : null,
+          race_sodium_hot_mg: editForm.race_sodium_hot_mg ? Number(editForm.race_sodium_hot_mg) : null,
+        }),
       })
       if (res.ok) {
         const { data } = await res.json()
@@ -613,6 +628,10 @@ interface EditForm {
   stretch_goal: string
   general_notes: string
   status: 'upcoming' | 'completed'
+  race_carb_per_hour_g: string
+  race_fluid_per_hour_ml: string
+  race_sodium_per_hour_mg: string
+  race_sodium_hot_mg: string
 }
 
 function OverviewTab({
@@ -690,6 +709,58 @@ function OverviewTab({
           </div>
         </div>
       )}
+
+      {/* Race-day fueling */}
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-3)', marginBottom: 12 }}>Race-day fueling</div>
+        {editMode ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', background: 'var(--border-subtle)', borderRadius: 8, overflow: 'hidden' }}>
+            {(
+              [
+                ['Carbs / h', 'race_carb_per_hour_g', 'g/h'],
+                ['Fluid / h', 'race_fluid_per_hour_ml', 'ml/h'],
+                ['Sodium / h', 'race_sodium_per_hour_mg', 'mg/h'],
+                ['Sodium hot / h', 'race_sodium_hot_mg', 'mg/h'],
+              ] as [string, keyof EditForm, string][]
+            ).map(([label, key, unit]) => (
+              <div key={key} style={{ background: 'var(--bg-2)', padding: '10px 14px' }}>
+                <div style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 6 }}>{label}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="number"
+                    value={editForm[key] as string}
+                    onChange={(e) => { const v = e.target.value; setEditForm((f) => ({ ...f, [key]: v })) }}
+                    style={{ ...inputStyle, width: 80 }}
+                    placeholder="—"
+                  />
+                  <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', background: 'var(--border-subtle)', borderRadius: 8, overflow: 'hidden' }}>
+            {(
+              [
+                ['Carbs / h', race.race_carb_per_hour_g != null ? `${race.race_carb_per_hour_g}g` : '—'],
+                ['Fluid / h', race.race_fluid_per_hour_ml != null ? `${race.race_fluid_per_hour_ml}ml` : '—'],
+                ['Sodium / h', race.race_sodium_per_hour_mg != null ? `${race.race_sodium_per_hour_mg}mg` : '—'],
+                ['Sodium hot / h', race.race_sodium_hot_mg != null ? `${race.race_sodium_hot_mg}mg` : '—'],
+              ] as [string, string][]
+            ).map(([label, value]) => (
+              <div key={label} style={{ background: 'var(--bg-2)', padding: '10px 14px' }}>
+                <div style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 3 }}>{label}</div>
+                <div style={{ fontSize: 13, color: value === '—' ? 'var(--fg-4)' : 'var(--fg-1)' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!editMode && !race.race_carb_per_hour_g && !race.race_fluid_per_hour_ml && (
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', fontStyle: 'italic', marginTop: 8 }}>
+            No race-day fueling targets set. Click Edit race to add them.
+          </div>
+        )}
+      </div>
 
       {/* General notes */}
       <div>

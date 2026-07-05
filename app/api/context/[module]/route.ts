@@ -15,7 +15,7 @@ const ALLOWED_MODULES = [
 const INTEGER_FIELDS: Record<string, string[]> = {
   athlete_profile:      ['age', 'experience_years', 'ftp_watts', 'ftp_override', 'threshold_hr_cycling', 'threshold_hr_running'],
   plan_dna:             ['quality_sessions_per_week', 'ramp_rate_tss_per_week', 'peak_weekly_tss', 'current_week_in_phase', 'phase_length_weeks'],
-  fueling_strategy:     ['race_carb_per_hour_g', 'race_fluid_per_hour_ml', 'race_sodium_per_hour_mg', 'training_carb_per_hour_g', 'bars_allowed_until_mins', 'heat_threshold_celsius'],
+  fueling_strategy:     ['training_carb_per_hour_g', 'bars_allowed_until_mins', 'heat_threshold_celsius'],
   recovery_preferences: ['deload_frequency_weeks', 'deload_load_percent'],
   health_injury:        [],
   coach_style:          [],
@@ -139,6 +139,12 @@ export async function PUT(
   void _u; void _i
 
   const fields = coerceFields(module, rawFields)
+
+  // When athlete_profile.location changes, invalidate the geocode cache
+  if (module === 'athlete_profile' && 'location' in rawFields) {
+    fields.location_lat = null
+    fields.location_lon = null
+  }
 
   const admin = createAdminClient()
   const payload = { user_id: user.id, ...fields, updated_at: new Date().toISOString() }

@@ -1046,6 +1046,27 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
         </div>
       )}
 
+      {/* Session fueling plan */}
+      {(session.fueling_carb_g_per_hour || session.fueling_fluid_ml_per_hour || session.fueling_sodium_mg_per_hour || session.fueling_note) && (
+        <div style={{ padding: '14px 16px', background: 'rgba(139,124,246,0.04)', border: '1px solid rgba(139,124,246,0.12)', borderRadius: 8 }}>
+          <div style={{ fontSize: 10, color: 'var(--ai)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            Fueling plan
+          </div>
+          {(session.fueling_carb_g_per_hour || session.fueling_fluid_ml_per_hour || session.fueling_sodium_mg_per_hour) && (
+            <div style={{ fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', marginBottom: session.fueling_note ? 6 : 0 }}>
+              {[
+                session.fueling_carb_g_per_hour ? `${session.fueling_carb_g_per_hour}g carbs/h` : null,
+                session.fueling_fluid_ml_per_hour ? `${session.fueling_fluid_ml_per_hour}ml fluid/h` : null,
+                session.fueling_sodium_mg_per_hour ? `${session.fueling_sodium_mg_per_hour}mg sodium/h` : null,
+              ].filter(Boolean).join(' · ')}
+            </div>
+          )}
+          {session.fueling_note && (
+            <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>{session.fueling_note}</div>
+          )}
+        </div>
+      )}
+
       {/* AI Summary */}
       <div style={{ padding: '14px 16px', background: 'rgba(139,124,246,0.04)', border: '1px solid rgba(139,124,246,0.12)', borderRadius: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>

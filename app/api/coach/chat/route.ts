@@ -13,6 +13,13 @@ function isValidUUID(str: string | undefined): str is string {
 
 // ── Tool schemas ─────────────────────────────────────────────────────────────
 
+interface FuelingSuggestion {
+  carb_g_per_hour?: number | null
+  fluid_ml_per_hour?: number | null
+  sodium_mg_per_hour?: number | null
+  note?: string | null
+}
+
 interface ProposeSessionInput {
   name: string
   type: string
@@ -22,6 +29,7 @@ interface ProposeSessionInput {
   duration_seconds: number
   estimated_tss: number
   intervals_format: string
+  fueling_suggestion?: FuelingSuggestion | null
 }
 
 const PROPOSE_SESSION_TOOL = {
@@ -39,6 +47,16 @@ const PROPOSE_SESSION_TOOL = {
       duration_seconds: { type: 'integer' },
       estimated_tss: { type: 'number' },
       intervals_format: { type: 'string', description: 'Structured workout text in Intervals.icu workout description format' },
+      fueling_suggestion: {
+        type: 'object',
+        description: 'Fueling guidance for this specific session based on sport, duration, effort, and forecast conditions. Omit for very short/easy sessions where only water is needed — in those cases set note to explain water-only rather than leaving blank. Use WEATHER CONDITIONS from context to calibrate: longer and hotter → more fluid and sodium; short/easy/recovery → water only.',
+        properties: {
+          carb_g_per_hour: { type: 'number', description: 'Carbohydrate target in grams per hour. Omit or set to 0 for water-only sessions.' },
+          fluid_ml_per_hour: { type: 'number', description: 'Fluid target in ml per hour.' },
+          sodium_mg_per_hour: { type: 'number', description: 'Sodium target in mg per hour.' },
+          note: { type: 'string', description: 'Short plain-language rationale, e.g. \'Hot forecast (29°C) and 3h duration — higher sodium and fluid than usual.\' or \'45min easy run — water only, no fueling needed.\'' },
+        },
+      },
     },
   },
 }
@@ -52,7 +70,7 @@ const PROPOSE_CONTEXT_UPDATE_TOOL = {
     properties: {
       target_module: {
         type: 'string',
-        enum: ['plan_dna', 'training_patterns', 'adaptation_rules', 'race_goals', 'fueling_strategy', 'illnesses', 'injuries', 'recovery_preferences', 'session_notes'],
+        enum: ['plan_dna', 'training_patterns', 'adaptation_rules', 'race_goals', 'fueling_strategy', 'illnesses', 'injuries', 'recovery_preferences', 'session_notes', 'session'],
       },
       action: {
         type: 'string',
@@ -80,7 +98,7 @@ const PROPOSE_CONTEXT_UPDATE_TOOL = {
 // ── Two-tier routing ─────────────────────────────────────────────────────────
 
 // These modules go directly to auto-apply (no review step)
-const AUTO_APPLY_MODULES = new Set(['session_notes'])
+const AUTO_APPLY_MODULES = new Set(['session_notes', 'session'])
 
 // training_patterns with kind=observation also auto-apply
 // fueling_strategy → kept in review for now (low-stakes but product decision pending)
@@ -112,6 +130,14 @@ SESSION CREATION MODE
 Help the athlete design a training session that fits their current context. Consider today's readiness, their current training phase, and any applicable adaptation rules before recommending intensity or volume.
 
 When you and the athlete have agreed on a specific session — its type, structure, and date — call the propose_session tool. Use the date explicitly discussed; do not assume today. The athlete must confirm before anything is saved to their calendar.
+
+Always include a fueling_suggestion in the proposal. Calibrate using the WEATHER CONDITIONS section (if present) for the session's date:
+- Sessions ≥2h or with forecast max >25°C: include carb/fluid/sodium targets. Hot conditions (>28°C) warrant +15–25% fluid and sodium vs. standard.
+- Sessions <90min, easy/recovery effort, cool conditions: set note to explain "water only — no fueling needed" and omit or zero the numeric fields.
+- If no forecast is available (date beyond 16-day window or no location set): use sensible defaults and note in fueling_suggestion.note that no forecast was available rather than inventing weather conditions.
+- Never leave fueling_suggestion empty or null without explanation — either provide targets or state why water-only is appropriate.
+
+After a session is confirmed and the athlete wants to adjust its fueling, call propose_context_update with target_module "session", action "update", target_id = the session's session_id, and fields containing the updated fueling_carb_g_per_hour / fueling_fluid_ml_per_hour / fueling_sodium_mg_per_hour / fueling_note values.
 `
 
 const INJURY_OVERLAY = `
@@ -443,6 +469,31 @@ Your task for this review:
                 console.error('[chat] auto-apply session_notes error:', snErr)
               } else {
                 autoApplied.push({ target_module: 'session_notes', action: 'update', summary: 'Session notes updated' })
+              }
+            }
+          } else if (input.target_module === 'session') {
+            // Session fueling amendment — athlete discussed a change, auto-apply to session_notes row
+            if (input.action === 'update' && input.target_id) {
+              const allowedSessionFields = new Set([
+                'fueling_carb_g_per_hour', 'fueling_fluid_ml_per_hour',
+                'fueling_sodium_mg_per_hour', 'fueling_note',
+                'athlete_notes', 'rpe',
+              ])
+              const safeFields: Record<string, unknown> = {}
+              for (const [k, v] of Object.entries(input.fields ?? {})) {
+                if (allowedSessionFields.has(k)) safeFields[k] = v
+              }
+              if (Object.keys(safeFields).length > 0) {
+                const { error: sessErr } = await admin
+                  .from('session_notes')
+                  .update({ ...safeFields, updated_at: now })
+                  .eq('session_id', input.target_id)
+                  .eq('user_id', user.id)
+                if (sessErr) {
+                  console.error('[chat] auto-apply session update error:', sessErr)
+                } else {
+                  autoApplied.push({ target_module: 'session', action: 'update', summary: 'Session updated' })
+                }
               }
             }
           }

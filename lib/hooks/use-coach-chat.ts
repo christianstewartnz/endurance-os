@@ -2,6 +2,13 @@
 
 import { useState, useRef, useCallback } from 'react'
 
+export interface FuelingSuggestion {
+  carb_g_per_hour?: number | null
+  fluid_ml_per_hour?: number | null
+  sodium_mg_per_hour?: number | null
+  note?: string | null
+}
+
 export interface ProposeSessionInput {
   name: string
   type: string
@@ -11,6 +18,7 @@ export interface ProposeSessionInput {
   duration_seconds: number
   estimated_tss: number
   intervals_format: string
+  fueling_suggestion?: FuelingSuggestion | null
 }
 
 export interface StreamResult {
