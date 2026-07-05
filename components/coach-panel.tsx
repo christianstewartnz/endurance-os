@@ -553,6 +553,7 @@ export default function CoachPanel() {
                           body: JSON.stringify({ proposal: m.proposal, date }),
                         })
                         setMessages((prev) => prev.map((msg) => msg.id === msgId ? { ...msg, proposal: undefined } : msg))
+                        window.dispatchEvent(new CustomEvent('endurance:calendar-refresh'))
                         router.refresh()
                       } catch { /* non-fatal */ } finally {
                         setAddingSessionMsgId(null)
@@ -576,6 +577,7 @@ export default function CoachPanel() {
                           body: JSON.stringify({ date: removalDate }),
                         })
                         setMessages((prev) => prev.map((msg) => msg.id === msgId ? { ...msg, proposalRemoval: undefined } : msg))
+                        window.dispatchEvent(new CustomEvent('endurance:calendar-refresh'))
                         router.refresh()
                       } catch { /* non-fatal */ } finally {
                         setRemovingSessionMsgId(null)

@@ -1,4 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createIntervalsClient } from '@/lib/intervals/client'
+import type { IntervalEvent } from '@/lib/intervals/types'
 import { geocodeLocation, getForecastRange } from '@/lib/weather/client'
 import type { WeekForecast } from '@/lib/weather/client'
 
@@ -13,6 +15,12 @@ function todayStr(): string {
 function daysAgoStr(n: number): string {
   const d = new Date()
   d.setDate(d.getDate() - n)
+  return localDateStr(d)
+}
+
+function daysFromStr(base: string, n: number): string {
+  const d = parseDateLocal(base)
+  d.setDate(d.getDate() + n)
   return localDateStr(d)
 }
 
@@ -478,40 +486,71 @@ TODAY'S READINESS (${dateLabel})
   return section
 }
 
-function buildSessionHistoryLayer(sessions: Record<string, unknown>[]): string {
-  if (!sessions.length) return ''
+function buildSessionHistoryLayer(sessions: Record<string, unknown>[], upcomingEvents: IntervalEvent[]): string {
+  if (!sessions.length && !upcomingEvents.length) return ''
 
-  // Split into planned (no actual data yet) and completed
-  const planned = sessions
-    .filter((s) => s.actual_duration_seconds == null)
-    .sort((a, b) => ((a.session_date as string) ?? '').localeCompare((b.session_date as string) ?? ''))
-
+  // Sessions from session_notes with actual data = completed
   const completed = sessions
     .filter((s) => s.actual_duration_seconds != null)
     .sort((a, b) => ((b.session_date as string) ?? '').localeCompare((a.session_date as string) ?? ''))
     .slice(0, 10)
 
+  // session_notes planned rows (no actual data) — used for fueling notes etc. keyed by date
+  const snPlannedByDate = new Map<string, Record<string, unknown>>()
+  for (const s of sessions) {
+    if (s.actual_duration_seconds == null && s.session_date) {
+      snPlannedByDate.set(s.session_date as string, s)
+    }
+  }
+
+  // Primary source for upcoming: Intervals.icu calendar events
+  // These are what the calendar widget shows, so the coach sees the same picture
+  const upcoming = [...upcomingEvents]
+    .filter((e) => e.category === 'WORKOUT' || e.category === 'NOTE')
+    .sort((a, b) => a.start_date_local.localeCompare(b.start_date_local))
+
   const sections: string[] = []
 
-  if (planned.length) {
-    const lines = planned.map((s) => {
-      const date = s.session_date
-        ? parseDateLocal(s.session_date as string).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-        : '—'
-      const planDur = s.planned_duration_seconds
-        ? (() => {
-            const secs = s.planned_duration_seconds as number
-            const h = Math.floor(secs / 3600)
-            const m = Math.floor((secs % 3600) / 60)
-            return h > 0 ? `~${h}h ${m}min` : `~${m}min`
-          })()
-        : null
-      let line = `${date} · ${s.session_type ?? 'Workout'} · ${s.sport ?? ''} [date:${s.session_date}]`
-      if (planDur) line += `\n  Planned: ${planDur}`
-      if (s.planned_tss) line += ` · Est. TSS ${Math.round(s.planned_tss as number)}`
-      if (s.fueling_note) line += `\n  Fueling: ${s.fueling_note}`
+  if (upcoming.length) {
+    const lines = upcoming.map((e) => {
+      const dateStr = e.start_date_local.slice(0, 10)
+      const dateLabel = parseDateLocal(dateStr).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+      const tss = e.icu_training_load ? ` · Est. TSS ${Math.round(e.icu_training_load)}` : ''
+      const isAiCreated = e.external_id?.startsWith('endurance-os-ai-')
+      let line = `${dateLabel} · ${e.name} · ${e.type} [date:${dateStr}]${tss}`
+      if (isAiCreated) line += ' [AI-created — removable]'
+      // Add fueling info from session_notes if available
+      const sn = snPlannedByDate.get(dateStr)
+      if (sn?.fueling_note) line += `\n  Fueling: ${sn.fueling_note}`
+      else if (sn?.planned_duration_seconds) {
+        const secs = sn.planned_duration_seconds as number
+        const h = Math.floor(secs / 3600)
+        const m = Math.floor((secs % 3600) / 60)
+        line += `\n  Duration: ~${h > 0 ? `${h}h ${m}min` : `${m}min`}`
+      }
       return line
     }).join('\n\n')
+    sections.push(`PLANNED / UPCOMING:\n\n${lines}`)
+  } else if (snPlannedByDate.size > 0) {
+    // Fallback: Intervals.icu unavailable, use session_notes planned rows
+    const lines = [...snPlannedByDate.values()]
+      .sort((a, b) => ((a.session_date as string) ?? '').localeCompare((b.session_date as string) ?? ''))
+      .map((s) => {
+        const dateLabel = parseDateLocal(s.session_date as string).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+        const planDur = s.planned_duration_seconds
+          ? (() => {
+              const secs = s.planned_duration_seconds as number
+              const h = Math.floor(secs / 3600)
+              const m = Math.floor((secs % 3600) / 60)
+              return h > 0 ? `~${h}h ${m}min` : `~${m}min`
+            })()
+          : null
+        let line = `${dateLabel} · ${s.session_type ?? 'Workout'} · ${s.sport ?? ''} [date:${s.session_date}]`
+        if (planDur) line += `\n  Duration: ${planDur}`
+        if (s.planned_tss) line += ` · Est. TSS ${Math.round(s.planned_tss as number)}`
+        if (s.fueling_note) line += `\n  Fueling: ${s.fueling_note}`
+        return line
+      }).join('\n\n')
     sections.push(`PLANNED / UPCOMING:\n\n${lines}`)
   }
 
@@ -721,6 +760,26 @@ export async function buildSystemPrompt(userId: string, clientToday?: string): P
   const effectivePace = (profile?.threshold_pace_override ?? profile?.threshold_pace_per_km) as number | null
   const effectiveCss = (profile?.threshold_css_override ?? profile?.threshold_css) as number | null
 
+  // Upcoming planned events from Intervals.icu (same source as the calendar widget)
+  const { data: userCreds } = await admin
+    .from('users')
+    .select('intervals_api_key, intervals_athlete_id')
+    .eq('id', userId)
+    .single()
+
+  let upcomingEvents: IntervalEvent[] = []
+  if (userCreds?.intervals_api_key && userCreds?.intervals_athlete_id) {
+    try {
+      const intervalsClient = createIntervalsClient(
+        userCreds.intervals_api_key as string,
+        userCreds.intervals_athlete_id as string,
+      )
+      upcomingEvents = await intervalsClient.getCalendarEvents(today, daysFromStr(today, 14))
+    } catch {
+      // not fatal — coach will fall back to session_notes planned rows
+    }
+  }
+
   // Weather: geocode athlete location if needed, then fetch 16-day forecast
   let forecast: WeekForecast | null = null
   if (profile) {
@@ -771,7 +830,7 @@ export async function buildSystemPrompt(userId: string, clientToday?: string): P
     buildHealthLayer(health, illnesses, injuries, injuryHistory),
     buildRecoveryLayer(recovery),
     buildReadinessLayer(todayWellness, recentWellness),
-    buildSessionHistoryLayer(sessions),
+    buildSessionHistoryLayer(sessions, upcomingEvents),
     buildConditionsLayer(forecast, profile?.location as string | null),
     buildRecentConversationsLayer(recentConversations),
     buildContextUpdateInstructions(),

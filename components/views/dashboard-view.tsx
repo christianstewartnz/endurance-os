@@ -165,7 +165,7 @@ export default function DashboardView({
       {showSessionModal && (
         <SessionCreationModal
           onClose={() => setShowSessionModal(false)}
-          onSessionAdded={() => { setSessionCreated(true); setShowSessionModal(false); router.refresh() }}
+          onSessionAdded={() => { setSessionCreated(true); setShowSessionModal(false); window.dispatchEvent(new CustomEvent('endurance:calendar-refresh')); router.refresh() }}
         />
       )}
       <ReadinessRow
@@ -839,6 +839,24 @@ function WeekStrip({
   const viewingContainsToday = todayStr >= weekMonday && todayStr <= weekSunday
 
   const weekDates = Array.from({ length: 7 }, (_, i) => parseLocalDate(addDaysToDateStr(weekMonday, i)))
+
+  const refetchCurrentWeek = useCallback(async () => {
+    const sunday = addDaysToDateStr(weekMonday, 6)
+    try {
+      const res = await fetch(`/api/calendar?start=${weekMonday}&end=${sunday}`)
+      if (res.ok) {
+        const data = await res.json()
+        setSessions(data.sessions ?? [])
+        setEvents(data.plannedEvents ?? [])
+      }
+    } catch { /* keep existing data */ }
+  }, [weekMonday])
+
+  useEffect(() => {
+    const handler = () => { refetchCurrentWeek() }
+    window.addEventListener('endurance:calendar-refresh', handler)
+    return () => window.removeEventListener('endurance:calendar-refresh', handler)
+  }, [refetchCurrentWeek])
 
   const navigateWeek = useCallback(async (dir: -1 | 1) => {
     if (navigating) return
