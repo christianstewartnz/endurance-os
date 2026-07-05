@@ -481,68 +481,101 @@ TODAY'S READINESS (${dateLabel})
 function buildSessionHistoryLayer(sessions: Record<string, unknown>[]): string {
   if (!sessions.length) return ''
 
-  const lines = sessions.slice(0, 10).map((s) => {
-    const date = s.session_date ? parseDateLocal(s.session_date as string).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '—'
-    const duration = s.actual_duration_seconds ? (() => {
-      const secs = s.actual_duration_seconds as number
-      const h = Math.floor(secs / 3600)
-      const m = Math.floor((secs % 3600) / 60)
-      return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}min`
-    })() : '—'
+  // Split into planned (no actual data yet) and completed
+  const planned = sessions
+    .filter((s) => s.actual_duration_seconds == null)
+    .sort((a, b) => ((a.session_date as string) ?? '').localeCompare((b.session_date as string) ?? ''))
 
-    const sport = s.sport as string | null
+  const completed = sessions
+    .filter((s) => s.actual_duration_seconds != null)
+    .sort((a, b) => ((b.session_date as string) ?? '').localeCompare((a.session_date as string) ?? ''))
+    .slice(0, 10)
 
-    let line = `[id:${s.id}] ${date} · ${s.session_type ?? 'Workout'} · ${sport ?? ''}`
-    line += `\n  Duration: ${duration}`
+  const sections: string[] = []
 
-    if (sport === 'cycling') {
-      if (s.avg_power_watts)         line += ` · Avg: ${Math.round(s.avg_power_watts as number)}W`
-      if (s.normalized_power_watts)  line += ` · NP: ${Math.round(s.normalized_power_watts as number)}W`
-      if (s.actual_tss)              line += ` · TSS: ${Math.round(s.actual_tss as number)}`
-      if (s.intensity_factor)        line += ` · IF: ${(s.intensity_factor as number).toFixed(2)}`
-      if (s.cardiac_drift_percent != null) line += ` · Drift: ${(s.cardiac_drift_percent as number).toFixed(1)}%`
-    } else if (sport === 'running') {
-      const paceSecsKm = s.pace_per_km as number | null
-      if (paceSecsKm) {
-        const m = Math.floor(paceSecsKm / 60)
-        const sc = Math.round(paceSecsKm % 60)
-        line += ` · Pace: ${m}:${String(sc).padStart(2, '0')}/km`
+  if (planned.length) {
+    const lines = planned.map((s) => {
+      const date = s.session_date
+        ? parseDateLocal(s.session_date as string).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+        : '—'
+      const planDur = s.planned_duration_seconds
+        ? (() => {
+            const secs = s.planned_duration_seconds as number
+            const h = Math.floor(secs / 3600)
+            const m = Math.floor((secs % 3600) / 60)
+            return h > 0 ? `~${h}h ${m}min` : `~${m}min`
+          })()
+        : null
+      let line = `${date} · ${s.session_type ?? 'Workout'} · ${s.sport ?? ''} [date:${s.session_date}]`
+      if (planDur) line += `\n  Planned: ${planDur}`
+      if (s.planned_tss) line += ` · Est. TSS ${Math.round(s.planned_tss as number)}`
+      if (s.fueling_note) line += `\n  Fueling: ${s.fueling_note}`
+      return line
+    }).join('\n\n')
+    sections.push(`PLANNED / UPCOMING:\n\n${lines}`)
+  }
+
+  if (completed.length) {
+    const lines = completed.map((s) => {
+      const date = s.session_date
+        ? parseDateLocal(s.session_date as string).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+        : '—'
+      const duration = (() => {
+        const secs = s.actual_duration_seconds as number
+        const h = Math.floor(secs / 3600)
+        const m = Math.floor((secs % 3600) / 60)
+        return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}min`
+      })()
+      const sport = s.sport as string | null
+      let line = `[id:${s.id}] ${date} · ${s.session_type ?? 'Workout'} · ${sport ?? ''}`
+      line += `\n  Duration: ${duration}`
+      if (sport === 'cycling') {
+        if (s.avg_power_watts)        line += ` · Avg: ${Math.round(s.avg_power_watts as number)}W`
+        if (s.normalized_power_watts) line += ` · NP: ${Math.round(s.normalized_power_watts as number)}W`
+        if (s.actual_tss)             line += ` · TSS: ${Math.round(s.actual_tss as number)}`
+        if (s.intensity_factor)       line += ` · IF: ${(s.intensity_factor as number).toFixed(2)}`
+        if (s.cardiac_drift_percent != null) line += ` · Drift: ${(s.cardiac_drift_percent as number).toFixed(1)}%`
+      } else if (sport === 'running') {
+        const paceSecsKm = s.pace_per_km as number | null
+        if (paceSecsKm) {
+          const pm = Math.floor(paceSecsKm / 60)
+          const ps = Math.round(paceSecsKm % 60)
+          line += ` · Pace: ${pm}:${String(ps).padStart(2, '0')}/km`
+        }
+        if (s.avg_hr)     line += ` · HR: ${Math.round(s.avg_hr as number)}bpm`
+        if (s.actual_tss) line += ` · TSS: ${Math.round(s.actual_tss as number)}`
+        if (s.aerobic_decoupling != null) line += ` · AeD: ${(s.aerobic_decoupling as number).toFixed(1)}%`
+      } else if (sport === 'swimming') {
+        if (s.distance_meters) {
+          const dm = s.distance_meters as number
+          line += ` · ${dm >= 1000 ? `${(dm / 1000).toFixed(1)}km` : `${Math.round(dm)}m`}`
+        }
+        if (s.actual_duration_seconds && s.distance_meters) {
+          const pace100m = (s.actual_duration_seconds as number) / ((s.distance_meters as number) / 100)
+          const pm = Math.floor(pace100m / 60)
+          const ps = Math.round(pace100m % 60)
+          line += ` · Pace: ${pm}:${String(ps).padStart(2, '0')}/100m`
+        }
+        if (s.actual_tss) line += ` · TSS: ${Math.round(s.actual_tss as number)}`
+      } else {
+        if (s.actual_tss) line += ` · TSS: ${Math.round(s.actual_tss as number)}`
       }
-      if (s.avg_hr)      line += ` · HR: ${Math.round(s.avg_hr as number)}bpm`
-      if (s.actual_tss)  line += ` · TSS: ${Math.round(s.actual_tss as number)}`
-      if (s.aerobic_decoupling != null) line += ` · AeD: ${(s.aerobic_decoupling as number).toFixed(1)}%`
-    } else if (sport === 'swimming') {
-      if (s.distance_meters) {
-        const dm = s.distance_meters as number
-        line += ` · ${dm >= 1000 ? `${(dm / 1000).toFixed(1)}km` : `${Math.round(dm)}m`}`
+      if (s.rpe)           line += ` · RPE: ${s.rpe}`
+      if (s.athlete_notes) line += `\n  Notes: "${s.athlete_notes}"`
+      if (s.ai_flags) {
+        const flags = Array.isArray(s.ai_flags) ? (s.ai_flags as string[]).join(', ') : s.ai_flags
+        line += `\n  AI flags: ${flags}`
       }
-      if (s.actual_duration_seconds && s.distance_meters) {
-        const pace100m = (s.actual_duration_seconds as number) / ((s.distance_meters as number) / 100)
-        const m = Math.floor(pace100m / 60)
-        const sc = Math.round(pace100m % 60)
-        line += ` · Pace: ${m}:${String(sc).padStart(2, '0')}/100m`
-      }
-      if (s.actual_tss) line += ` · TSS: ${Math.round(s.actual_tss as number)}`
-    } else {
-      if (s.actual_tss) line += ` · TSS: ${Math.round(s.actual_tss as number)}`
-    }
-
-    if (s.rpe)           line += ` · RPE: ${s.rpe}`
-    if (s.athlete_notes) line += `\n  Notes: "${s.athlete_notes}"`
-    if (s.ai_flags) {
-      const flags = Array.isArray(s.ai_flags) ? (s.ai_flags as string[]).join(', ') : s.ai_flags
-      line += `\n  AI flags: ${flags}`
-    }
-    return line
-  }).join('\n\n')
+      return line
+    }).join('\n\n')
+    sections.push(`COMPLETED (last 28 days):\n\n${lines}\n\n[Older sessions available on request]`)
+  }
 
   return `════════════════════════════════════════
-SESSION HISTORY (last 28 days)
+SESSIONS
 ════════════════════════════════════════
 
-${lines}
-
-[Older sessions available — ask athlete to reference specific date or session]`
+${sections.join('\n\n')}`
 }
 
 function buildRecentConversationsLayer(conversations: Record<string, unknown>[]): string {
