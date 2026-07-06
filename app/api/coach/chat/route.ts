@@ -13,7 +13,7 @@ function isValidUUID(str: string | undefined): str is string {
 
 // ── Tool schemas ─────────────────────────────────────────────────────────────
 
-import type { WeeklySummaryData, SessionReviewData } from '@/lib/types/coach-widgets'
+import type { WeeklySummaryData, SessionReviewData, ProposedTrainingPlan } from '@/lib/types/coach-widgets'
 
 interface FuelingSuggestion {
   carb_g_per_hour?: number | null
@@ -144,6 +144,53 @@ const PRESENT_WEEKLY_SUMMARY_TOOL = {
   },
 }
 
+const PROPOSE_TRAINING_PLAN_TOOL = {
+  name: 'propose_training_plan',
+  description: 'Propose a full multi-week training plan once start date, goal, availability, and detail level have been agreed with the athlete. Requires explicit athlete confirmation before anything is written — calling this tool only presents the plan for review. Near-term sessions (next 2 weeks) should use detail_level "full" with intervals_format. Sessions further out should use detail_level "outline" (no intervals_format) to keep the plan payload manageable.',
+  input_schema: {
+    type: 'object',
+    required: ['start_date', 'end_date', 'goal', 'phases', 'sessions'],
+    properties: {
+      start_date: { type: 'string', description: 'ISO date (YYYY-MM-DD) the plan begins' },
+      end_date: { type: 'string', description: 'ISO date (YYYY-MM-DD) the plan ends (race day or block end)' },
+      linked_race_id: { type: 'string', description: 'Omit if this plan is not targeting a specific logged race' },
+      goal: { type: 'string', description: 'One-line goal e.g. "Race-specific prep for Ironman 70.3" or "Aerobic base block"' },
+      phases: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['name', 'start_date', 'end_date', 'focus'],
+          properties: {
+            name: { type: 'string' },
+            start_date: { type: 'string' },
+            end_date: { type: 'string' },
+            focus: { type: 'string' },
+            weekly_hours_target: { type: 'number' },
+            weekly_tss_target: { type: 'number' },
+          },
+        },
+      },
+      sessions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['date', 'sport', 'duration_minutes', 'detail_level', 'plan_phase'],
+          properties: {
+            date: { type: 'string', description: 'ISO date (YYYY-MM-DD)' },
+            sport: { type: 'string' },
+            name: { type: 'string' },
+            duration_minutes: { type: 'number' },
+            target_tss: { type: 'number' },
+            detail_level: { type: 'string', enum: ['full', 'outline'] },
+            intervals_format: { type: 'string', description: 'Only for detail_level "full" — omit for outline sessions' },
+            plan_phase: { type: 'string', description: 'Must match one of the phases\' names' },
+          },
+        },
+      },
+    },
+  },
+}
+
 const PRESENT_SESSION_REVIEW_TOOL = {
   name: 'present_session_review',
   description: 'Render a structured session review card in the chat. Call this as your opening review of a completed session — do not also write the same analysis as prose text. You may still call propose_context_update afterward to save the ai_summary and ai_flags.',
@@ -205,7 +252,7 @@ Always include a fueling_suggestion in the proposal. Calibrate using the WEATHER
 - If no forecast is available (date beyond 16-day window or no location set): use sensible defaults and note in fueling_suggestion.note that no forecast was available rather than inventing weather conditions.
 - Never leave fueling_suggestion empty or null without explanation — either provide targets or state why water-only is appropriate.
 
-After a session is confirmed and the athlete wants to adjust its fueling, call propose_context_update with target_module "session", action "update", target_id = the session's session_id, and fields containing the updated fueling_carb_g_per_hour / fueling_fluid_ml_per_hour / fueling_sodium_mg_per_hour / fueling_note values.
+After a session is confirmed and the athlete wants to adjust its fueling, call propose_context_update with target_module "session", action "update", target_id = the session's [id:...] UUID shown in the SESSION HISTORY section, and fields containing the updated fueling_carb_g_per_hour / fueling_fluid_ml_per_hour / fueling_sodium_mg_per_hour / fueling_note values.
 `
 
 const INJURY_OVERLAY = `
@@ -228,6 +275,40 @@ The athlete has reported an injury or health issue. Follow this process:
 
 4. Do not catastrophise. Be matter-of-fact. Give the athlete a clear picture of what training looks like during this period.
 `
+
+const PLAN_CREATION_OVERLAY = `
+════════════════════════════════════════
+TRAINING PLAN CREATION MODE
+════════════════════════════════════════
+
+Your job is to gather just enough information to build a plan, then BUILD IT. The goal is action, not endless questions.
+
+── FIRST RESPONSE ──
+Read the athlete's opening message. From their context (race goals, plan DNA, fitness data) infer everything you can. In your first reply, briefly state what you already know ("I can see you have a 70.3 on June 8, currently at CTL 62..."), propose a plan structure in 2–3 sentences (date range, phases, rough weekly hours), and ask ONE thing if genuinely unclear. Do not list questions.
+
+── WHEN TO CALL propose_training_plan ──
+Call the tool as soon as you have ALL of:
+  • start_date (athlete confirmed or said something like "start Monday" / "next week")
+  • end_date (race date from RACE GOALS, or athlete stated a block length)
+  • goal (race prep / base / build — infer from context if obvious)
+  • weekly_hours (from Plan DNA or athlete confirmed)
+
+Do NOT wait for the athlete to approve phases, sessions, or detail level — those are your design decisions, not theirs. If the athlete says "yes", "go ahead", "sounds good", "build it", "let's do it", or similar: call the tool immediately without further questions.
+
+── BUILDING THE PLAN ──
+Before calling the tool, write 1–2 sentences: what you're generating ("Building a 10-week plan..."). Then call propose_training_plan.
+
+Phase and session design (your call, not the athlete's):
+- Structure phases: base → build → peak → taper as appropriate for the goal and timeline
+- Each phase must have weekly_hours_target and weekly_tss_target
+- Near-term sessions (next 14 days from start_date): detail_level "full" with intervals_format
+- All other sessions: detail_level "outline", no intervals_format
+- plan_phase on each session must exactly match one of the phase names
+- Deload every 3–4 weeks per the athlete's recovery_preferences.deload_frequency_weeks
+- Reflect the athlete's training philosophy from Plan DNA
+
+Keep intervals_format concise (2–5 lines max). The plan JSON must fit within the response limit.
+════════════════════════════════════════`
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -265,13 +346,13 @@ export async function POST(req: NextRequest) {
   }: {
     messages: ChatMessage[]
     conversationId?: string
-    contextType?: 'general' | 'session_review' | 'session_creation' | 'injury'
+    contextType?: 'general' | 'session_review' | 'session_creation' | 'injury' | 'plan_creation'
     sessionId?: string
     clientDate?: string
   } = body
 
   const { prompt: basePrompt, modulesLoaded } = await buildSystemPrompt(user.id, clientDate)
-  const maxTokens = contextType === 'session_creation' ? 2048 : 1024
+  const maxTokens = contextType === 'plan_creation' ? 16000 : contextType === 'session_creation' ? 2048 : 1024
   let systemPrompt = basePrompt
 
   if (contextType === 'session_review' && sessionId) {
@@ -318,12 +399,16 @@ Your task for this review:
     systemPrompt += INJURY_OVERLAY
   }
 
+  if (contextType === 'plan_creation') {
+    systemPrompt += PLAN_CREATION_OVERLAY
+  }
+
   const anthropicBody = {
     model: MODEL,
     max_tokens: maxTokens,
     stream: true,
     system: systemPrompt,
-    tools: [PROPOSE_CONTEXT_UPDATE_TOOL, PROPOSE_SESSION_TOOL, REMOVE_SESSION_TOOL, PRESENT_WEEKLY_SUMMARY_TOOL, PRESENT_SESSION_REVIEW_TOOL],
+    tools: [PROPOSE_CONTEXT_UPDATE_TOOL, PROPOSE_SESSION_TOOL, REMOVE_SESSION_TOOL, PRESENT_WEEKLY_SUMMARY_TOOL, PRESENT_SESSION_REVIEW_TOOL, PROPOSE_TRAINING_PLAN_TOOL],
     messages,
   }
 
@@ -334,6 +419,7 @@ Your task for this review:
       headers: {
         'x-api-key': anthropicKey,
         'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'output-128k-2025-02-19',
         'content-type': 'application/json',
       },
       body: JSON.stringify(anthropicBody),
@@ -367,11 +453,13 @@ Your task for this review:
   let proposedRemoval: RemoveSessionInput | null = null
   let weeklySummary: WeeklySummaryData | null = null
   let sessionReview: SessionReviewData | null = null
+  let proposedPlan: ProposedTrainingPlan | null = null
 
   const stream = new ReadableStream({
     async start(controller) {
       const reader = upstream.getReader()
       const decoder = new TextDecoder()
+      let lineBuffer = ''
 
       try {
         while (true) {
@@ -381,7 +469,10 @@ Your task for this review:
           const chunk = decoder.decode(value, { stream: true })
           controller.enqueue(new TextEncoder().encode(chunk))
 
-          const lines = chunk.split('\n')
+          lineBuffer += chunk
+          const lines = lineBuffer.split('\n')
+          lineBuffer = lines.pop() ?? ''
+
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue
             const data = line.slice(6)
@@ -395,11 +486,9 @@ Your task for this review:
               }
 
               if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
-                toolBlocks[parsed.index!] = {
-                  id: parsed.content_block.id ?? '',
-                  name: parsed.content_block.name ?? '',
-                  partialJson: '',
-                }
+                const toolName = parsed.content_block.name ?? ''
+                toolBlocks[parsed.index!] = { id: parsed.content_block.id ?? '', name: toolName, partialJson: '' }
+                console.log(`[chat] tool_use started: ${toolName}`)
               } else if (parsed.type === 'content_block_delta') {
                 if (parsed.delta?.type === 'text_delta') {
                   fullText += parsed.delta.text ?? ''
@@ -442,6 +531,14 @@ Your task for this review:
                       sessionReview = JSON.parse(block.partialJson) as SessionReviewData
                     } catch {
                       console.error('[chat] failed to parse present_session_review input:', block.partialJson)
+                    }
+                  } else if (block.name === 'propose_training_plan') {
+                    try {
+                      proposedPlan = JSON.parse(block.partialJson) as ProposedTrainingPlan
+                      console.log(`[chat] propose_training_plan parsed OK: ${proposedPlan.sessions?.length ?? 0} sessions, ${proposedPlan.phases?.length ?? 0} phases`)
+                    } catch (parseErr) {
+                      console.error('[chat] failed to parse propose_training_plan input:', parseErr)
+                      console.error('[chat] raw JSON length:', block.partialJson.length, 'first 500:', block.partialJson.slice(0, 500))
                     }
                   }
                 }
@@ -569,6 +666,10 @@ Your task for this review:
                 'fueling_carb_g_per_hour', 'fueling_fluid_ml_per_hour',
                 'fueling_sodium_mg_per_hour', 'fueling_note',
                 'athlete_notes', 'rpe',
+                // plan session amendment fields
+                'name', 'sport', 'session_type', 'description',
+                'planned_duration_seconds', 'planned_tss',
+                'intervals_format', 'detail_level', 'plan_phase',
               ])
               const safeFields: Record<string, unknown> = {}
               for (const [k, v] of Object.entries(input.fields ?? {})) {
@@ -578,7 +679,7 @@ Your task for this review:
                 const { error: sessErr } = await admin
                   .from('session_notes')
                   .update({ ...safeFields, updated_at: now })
-                  .eq('session_id', input.target_id)
+                  .eq('id', input.target_id)
                   .eq('user_id', user.id)
                 if (sessErr) {
                   console.error('[chat] auto-apply session update error:', sessErr)
@@ -682,6 +783,7 @@ Your task for this review:
         ...(proposedRemoval ? { proposedRemoval } : {}),
         ...(weeklySummary ? { weeklySummary } : {}),
         ...(sessionReview ? { sessionReview } : {}),
+        ...(proposedPlan ? { proposedPlan } : {}),
       })}\n\n`
       controller.enqueue(new TextEncoder().encode(metaEvent))
       controller.close()

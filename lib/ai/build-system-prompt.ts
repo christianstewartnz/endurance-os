@@ -601,6 +601,7 @@ function buildSessionHistoryLayer(sessions: Record<string, unknown>[], upcomingE
       }
       if (s.rpe)           line += ` · RPE: ${s.rpe}`
       if (s.athlete_notes) line += `\n  Notes: "${s.athlete_notes}"`
+      if (s.training_plan_id) line += `\n  Plan session · Phase: ${s.plan_phase ?? '—'} · Detail: ${s.detail_level ?? '—'}`
       if (s.ai_flags) {
         const flags = Array.isArray(s.ai_flags) ? (s.ai_flags as string[]).join(', ') : s.ai_flags
         line += `\n  AI flags: ${flags}`

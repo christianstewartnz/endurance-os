@@ -10,6 +10,7 @@ import { useCoach } from '@/lib/context/coach-context'
 import { useCoachChat } from '@/lib/hooks/use-coach-chat'
 import { SessionProposalCard } from '@/components/session-proposal-card'
 import { SessionOverviewModal } from '@/components/views/calendar-view'
+import PlanCreationModal from '@/components/plan-creation-modal'
 import type { WellnessCacheRow, SessionNoteRow, IntervalEvent } from '@/lib/intervals/types'
 import type { ProposeSessionInput } from '@/lib/hooks/use-coach-chat'
 
@@ -78,6 +79,7 @@ export default function DashboardView({
   const { openCoach } = useCoachPanel()
   const { startSessionReview } = useCoach()
   const [showSessionModal, setShowSessionModal] = useState(false)
+  const [showPlanModal, setShowPlanModal] = useState(false)
   const [sessionCreated, setSessionCreated] = useState(false)
   const [overviewSession, setOverviewSession] = useState<SessionNoteRow | null>(null)
   const [overviewVisible, setOverviewVisible] = useState(false)
@@ -150,6 +152,7 @@ export default function DashboardView({
             <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 999, background: 'var(--success)', marginRight: 6, verticalAlign: 'middle' }} />
             Synced from Garmin · 2m ago
           </span>
+          <Button kind="ghost" size="md" icon="calendar-blank" onClick={() => setShowPlanModal(true)}>Training plan</Button>
           <Button kind="secondary" size="md" icon="plus">New session</Button>
         </div>
       </div>
@@ -166,6 +169,12 @@ export default function DashboardView({
         <SessionCreationModal
           onClose={() => setShowSessionModal(false)}
           onSessionAdded={() => { setSessionCreated(true); setShowSessionModal(false); window.dispatchEvent(new CustomEvent('endurance:calendar-refresh')); router.refresh() }}
+        />
+      )}
+      {showPlanModal && (
+        <PlanCreationModal
+          onClose={() => setShowPlanModal(false)}
+          onPlanAdded={() => { setShowPlanModal(false); window.dispatchEvent(new CustomEvent('endurance:calendar-refresh')); router.refresh() }}
         />
       )}
       <ReadinessRow

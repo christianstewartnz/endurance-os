@@ -216,7 +216,7 @@ export async function syncActivities(userId: string): Promise<void> {
       sport,
       // Core
       actual_tss: roundOrNull(a.icu_training_load),
-      actual_duration_seconds: roundOrNull(a.elapsed_time),
+      actual_duration_seconds: roundOrNull(a.moving_time ?? a.elapsed_time),
       avg_hr: roundOrNull(a.average_heartrate),
       max_hr: roundOrNull(a.max_heartrate),
       cardiac_drift_percent: null,  // not in Intervals.icu API

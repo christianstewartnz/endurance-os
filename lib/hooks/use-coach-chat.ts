@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
-import type { WeeklySummaryData, SessionReviewData } from '@/lib/types/coach-widgets'
+import type { WeeklySummaryData, SessionReviewData, ProposedTrainingPlan } from '@/lib/types/coach-widgets'
 
-export type { WeeklySummaryData, SessionReviewData }
+export type { WeeklySummaryData, SessionReviewData, ProposedTrainingPlan }
 
 export interface FuelingSuggestion {
   carb_g_per_hour?: number | null
@@ -37,12 +37,14 @@ export interface StreamResult {
   proposedRemoval: ProposeRemovalInput | null
   weeklySummary: WeeklySummaryData | null
   sessionReview: SessionReviewData | null
+  proposedPlan: ProposedTrainingPlan | null
 }
 
 export interface StreamCallbacks {
   onTextDelta: (delta: string) => void
   onComplete: (result: StreamResult) => void | Promise<void>
   onError: (errorMessage: string) => void
+  onToolCallStart?: (toolName: string) => void
 }
 
 function mapApiError(code?: string): string {
@@ -105,6 +107,7 @@ export function useCoachChat() {
         proposedRemoval?: ProposeRemovalInput
         weeklySummary?: WeeklySummaryData
         sessionReview?: SessionReviewData
+        proposedPlan?: ProposedTrainingPlan
       } | null = null
 
       while (true) {
@@ -123,15 +126,19 @@ export function useCoachChat() {
             const parsed = JSON.parse(data) as {
               type?: string
               delta?: { type?: string; text?: string }
+              content_block?: { type?: string; name?: string }
               modulesLoaded?: string[]
               newSuggestionIds?: string[]
               proposedSession?: ProposeSessionInput
               proposedRemoval?: ProposeRemovalInput
               weeklySummary?: WeeklySummaryData
               sessionReview?: SessionReviewData
+              proposedPlan?: ProposedTrainingPlan
             }
             if (parsed.type === 'endurance_meta') {
               enduranceMeta = parsed
+            } else if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
+              callbacks.onToolCallStart?.(parsed.content_block.name ?? '')
             } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
               const delta = parsed.delta.text ?? ''
               fullText += delta
@@ -149,6 +156,7 @@ export function useCoachChat() {
         proposedRemoval: enduranceMeta?.proposedRemoval ?? null,
         weeklySummary: enduranceMeta?.weeklySummary ?? null,
         sessionReview: enduranceMeta?.sessionReview ?? null,
+        proposedPlan: enduranceMeta?.proposedPlan ?? null,
       }))
     } catch (err) {
       if ((err as Error).name === 'AbortError') return

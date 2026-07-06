@@ -25,3 +25,32 @@ export interface SessionReviewData {
   analysis: string
   flags: string[]
 }
+
+export interface TrainingPlanPhase {
+  name: string
+  start_date: string
+  end_date: string
+  focus: string
+  weekly_hours_target?: number
+  weekly_tss_target?: number
+}
+
+export interface TrainingPlanSession {
+  date: string
+  sport: string
+  name?: string
+  duration_minutes: number
+  target_tss?: number
+  detail_level: 'full' | 'outline'
+  intervals_format?: string
+  plan_phase: string
+}
+
+export interface ProposedTrainingPlan {
+  start_date: string
+  end_date: string
+  linked_race_id?: string
+  goal: string
+  phases: TrainingPlanPhase[]
+  sessions: TrainingPlanSession[]
+}
