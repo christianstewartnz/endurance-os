@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createIntervalsClient, IntervalsApiError } from './client'
+import { runActivityMatching } from './matching'
 import type { IntervalsClient } from './client'
 import type { IntervalWellness, IntervalActivity, IntervalActivityDetail } from './types'
 
@@ -298,7 +299,14 @@ export async function syncActivities(userId: string): Promise<void> {
 
   if (error) {
     console.error('[intervals] syncActivities upsert error', error)
+    return
   }
+
+  // Run AI-powered matching against planned sessions — scans all unmatched
+  // sessions in the last 60 days so existing sessions get retroactively matched
+  runActivityMatching(userId).catch(e =>
+    console.error('[intervals] activity matching error', e)
+  )
 
   // Log any PB achievements Intervals.icu flagged on these activities
   for (const activity of activities) {

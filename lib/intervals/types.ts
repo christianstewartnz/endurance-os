@@ -205,4 +205,7 @@ export interface SessionNoteRow {
   detail_level?: string | null
   intervals_format?: string | null
   description?: string | null
+  // Activity match fields (completed sessions only)
+  matched_session_id?: string | null
+  match_status?: string | null  // 'auto' | 'confirmed' | 'rejected'
 }

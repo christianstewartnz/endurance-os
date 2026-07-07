@@ -343,8 +343,9 @@ export default function CalendarView({
   const [plannedEvents, setPlannedEvents] = useState(initialPlannedEvents)
   const [gridPhase, setGridPhase]         = useState<GridPhase>('idle')
   const [navigating, setNavigating]       = useState(false)
-  const [modalSession, setModalSession]   = useState<SessionNoteRow | null>(null)
-  const [modalVisible, setModalVisible]   = useState(false)
+  const [modalSession, setModalSession]         = useState<SessionNoteRow | null>(null)
+  const [modalPlannedSession, setModalPlannedSession] = useState<SessionNoteRow | null>(null)
+  const [modalVisible, setModalVisible]         = useState(false)
   const [reflectionText, setReflectionText]     = useState('')
   const [reflectionSaving, setReflectionSaving] = useState(false)
   const reflectionRef = useRef<HTMLTextAreaElement>(null)
@@ -438,11 +439,55 @@ export default function CalendarView({
     })
   }, [navigating, topMonday])
 
+  // Build a flat lookup map so modal can resolve matched planned sessions
+  const sessionById = new Map<string, SessionNoteRow>(sessions.map(s => [s.session_id, s]))
+
   const openModal = useCallback((session: SessionNoteRow) => {
     setModalSession(session)
     setReflectionText(session.athlete_notes ?? '')
+    setModalPlannedSession(
+      session.matched_session_id ? (sessionById.get(session.matched_session_id) ?? null) : null
+    )
     requestAnimationFrame(() => requestAnimationFrame(() => setModalVisible(true)))
+  }, [sessions]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleConfirmMatch = useCallback(async (completedId: string) => {
+    await fetch(`/api/sessions/${completedId}/match`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'confirmed' }),
+    })
+    setSessions(prev => prev.map(s =>
+      s.session_id === completedId ? { ...s, match_status: 'confirmed' } : s
+    ))
+    setModalSession(prev => prev?.session_id === completedId ? { ...prev, match_status: 'confirmed' } : prev)
   }, [])
+
+  const handleUnmatch = useCallback(async (completedId: string) => {
+    await fetch(`/api/sessions/${completedId}/match`, { method: 'DELETE' })
+    setSessions(prev => prev.map(s =>
+      s.session_id === completedId ? { ...s, matched_session_id: null, match_status: null } : s
+    ))
+    setModalPlannedSession(null)
+    setModalSession(prev =>
+      prev?.session_id === completedId ? { ...prev, matched_session_id: null, match_status: null } : prev
+    )
+  }, [])
+
+  const handleManualMatch = useCallback(async (completedId: string, plannedId: string) => {
+    await fetch(`/api/sessions/${completedId}/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plannedSessionId: plannedId }),
+    })
+    setSessions(prev => prev.map(s =>
+      s.session_id === completedId ? { ...s, matched_session_id: plannedId, match_status: 'confirmed' } : s
+    ))
+    setModalPlannedSession(sessionById.get(plannedId) ?? null)
+    setModalSession(prev =>
+      prev?.session_id === completedId ? { ...prev, matched_session_id: plannedId, match_status: 'confirmed' } : prev
+    )
+  }, [sessionById])
 
   const closeModal = useCallback(() => {
     setModalVisible(false)
@@ -529,6 +574,7 @@ export default function CalendarView({
                         wellness={wellnessByDate.get(dateStr)}
                         isToday={dateStr === localTodayStr}
                         selectedId={modalSession?.session_id ?? null}
+                        sessionById={sessionById}
                         onSelect={openModal}
                         borderBottom={rowBorder}
                       />
@@ -548,10 +594,24 @@ export default function CalendarView({
           reflectionText={reflectionText}
           reflectionSaving={reflectionSaving}
           reflectionRef={reflectionRef}
+          matchedPlannedSession={modalPlannedSession}
+          sameDayCandidates={
+            // Unmatched planned sessions on same day+sport for manual linking
+            !modalSession.matched_session_id && !isPlannedSession(modalSession)
+              ? (sessionsByDate.get(modalSession.session_date) ?? []).filter(s =>
+                  isPlannedSession(s) &&
+                  s.sport === modalSession.sport &&
+                  !sessions.some(c => c.matched_session_id === s.session_id)
+                )
+              : []
+          }
           onClose={closeModal}
           onReflectionChange={setReflectionText}
           onReflectionSave={saveReflection}
           onCoachOpen={() => { closeModal(); openCoach() }}
+          onConfirmMatch={() => handleConfirmMatch(modalSession.session_id)}
+          onUnmatch={() => handleUnmatch(modalSession.session_id)}
+          onManualMatch={(plannedId) => handleManualMatch(modalSession.session_id, plannedId)}
         />
       )}
     </>
@@ -609,10 +669,11 @@ function WeekInfoCell({ wk, borderBottom }: {
 
 // ── DayCell ───────────────────────────────────────────────────────────────────
 
-function DayCell({ dateStr, sessions, events, wellness, isToday, selectedId, onSelect, borderBottom }: {
+function DayCell({ dateStr, sessions, events, wellness, isToday, selectedId, sessionById, onSelect, borderBottom }: {
   dateStr: string; sessions: SessionNoteRow[]
   events: IntervalEvent[]; wellness: WellnessCacheRow | undefined
   isToday: boolean; selectedId: string | null
+  sessionById: Map<string, SessionNoteRow>
   onSelect: (s: SessionNoteRow) => void
   borderBottom?: string
 }) {
@@ -649,14 +710,37 @@ function DayCell({ dateStr, sessions, events, wellness, isToday, selectedId, onS
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {sessions.map(s => (
-          <SessionCard
-            key={s.session_id}
-            session={s}
-            isSelected={selectedId === s.session_id}
-            onClick={() => onSelect(s)}
-          />
-        ))}
+        {(() => {
+          // IDs of planned sessions already claimed by a matched completed session
+          const claimedPlannedIds = new Set(
+            sessions.flatMap(s => s.matched_session_id ? [s.matched_session_id] : [])
+          )
+          return sessions.map(s => {
+            // Skip planned sessions that have been merged into a completed tile
+            if (isPlannedSession(s) && claimedPlannedIds.has(s.session_id)) return null
+            // Completed session with a match → show merged tile
+            if (!isPlannedSession(s) && s.matched_session_id) {
+              const planned = sessionById.get(s.matched_session_id)
+              return (
+                <MatchedSessionCard
+                  key={s.session_id}
+                  completed={s}
+                  planned={planned ?? null}
+                  isSelected={selectedId === s.session_id}
+                  onClick={() => onSelect(s)}
+                />
+              )
+            }
+            return (
+              <SessionCard
+                key={s.session_id}
+                session={s}
+                isSelected={selectedId === s.session_id}
+                onClick={() => onSelect(s)}
+              />
+            )
+          })
+        })()}
         {events.map((e, i) => <PlannedEventCard key={i} event={e} />)}
       </div>
     </div>
@@ -817,6 +901,94 @@ function PlannedSessionCard({ session, isSelected, onClick }: {
   )
 }
 
+// ── MatchedSessionCard ────────────────────────────────────────────────────────
+
+function MatchedSessionCard({ completed, planned, isSelected, onClick }: {
+  completed: SessionNoteRow; planned: SessionNoteRow | null
+  isSelected: boolean; onClick: () => void
+}) {
+  const sportColor  = getSportColor(completed.sport)
+  const sportLabel  = getSportLabel(completed.sport)
+  const isPending   = completed.match_status === 'auto'
+  const power       = completed.normalized_power_watts ?? completed.avg_power_watts
+  const isCycling   = completed.sport === 'cycling'
+  const isRunning   = completed.sport === 'running'
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: '6px 8px',
+        background: 'var(--bg-1)',
+        borderTop:    `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderRight:  `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderBottom: `1px solid ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderLeft:   `2px solid ${sportColor}`,
+        borderRadius: 5,
+        cursor: 'pointer',
+        width: '100%',
+        boxSizing: 'border-box',
+        boxShadow: isSelected ? 'inset 0 0 0 1px var(--border-strong)' : 'none',
+        transition: 'border-color 80ms',
+      }}
+    >
+      {/* Match status badge + planned name */}
+      {planned && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3 }}>
+          <span style={{
+            fontSize: 8, fontFamily: 'var(--font-mono)', fontWeight: 600, letterSpacing: '0.04em',
+            color: isPending ? 'var(--fg-4)' : '#3FB37F',
+            background: isPending ? 'var(--bg-3)' : 'rgba(63,179,127,0.12)',
+            padding: '1px 4px', borderRadius: 3,
+          }}>
+            {isPending ? '~ MATCHED' : '✓ MATCHED'}
+          </span>
+          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {planned.name || getSportLabel(planned.sport)}
+          </span>
+        </div>
+      )}
+      {/* Completed metrics */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+        <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: sportColor, fontWeight: 700 }}>
+          {sportLabel.slice(0, 1)}
+        </span>
+        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-1)', fontWeight: 500 }}>
+          {formatDuration(completed.actual_duration_seconds)}
+        </span>
+        {completed.distance_meters != null && (
+          <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
+            · {formatDistance(completed.distance_meters)}
+          </span>
+        )}
+      </div>
+      {(completed.avg_hr != null || power != null || completed.pace_per_km != null) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          {completed.avg_hr != null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Icon name="heart" size={9} color="var(--fg-4)" />
+              <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>{Math.round(completed.avg_hr)}</span>
+            </div>
+          )}
+          {isCycling && power != null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Icon name="zap" size={9} color="var(--fg-4)" />
+              <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>{Math.round(power)}W</span>
+            </div>
+          )}
+          {isRunning && completed.pace_per_km != null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Icon name="timer" size={9} color="var(--fg-4)" />
+              <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>{formatPace(completed.pace_per_km)}</span>
+            </div>
+          )}
+        </div>
+      )}
+      <ZoneBar zones={completed.sport === 'cycling' ? getPowerZones(completed.zones) : getHrZones(completed.zones)} fallbackColor={sportColor} height={3} />
+    </div>
+  )
+}
+
 // ── PlannedEventCard ──────────────────────────────────────────────────────────
 
 function PlannedEventCard({ event }: { event: IntervalEvent }) {
@@ -848,20 +1020,27 @@ function PlannedEventCard({ event }: { event: IntervalEvent }) {
 type SessionTab = 'overview' | 'power' | 'pace' | 'stroke' | 'heartrate' | 'laps'
 
 export interface SessionOverviewModalProps {
-  session:            SessionNoteRow
-  visible:            boolean
-  reflectionText:     string
-  reflectionSaving:   boolean
-  reflectionRef:      React.RefObject<HTMLTextAreaElement | null>
-  onClose:            () => void
-  onReflectionChange: (v: string) => void
-  onReflectionSave:   () => void
-  onCoachOpen:        () => void
+  session:               SessionNoteRow
+  visible:               boolean
+  reflectionText:        string
+  reflectionSaving:      boolean
+  reflectionRef:         React.RefObject<HTMLTextAreaElement | null>
+  matchedPlannedSession: SessionNoteRow | null
+  sameDayCandidates:     SessionNoteRow[]
+  onClose:               () => void
+  onReflectionChange:    (v: string) => void
+  onReflectionSave:      () => void
+  onCoachOpen:           () => void
+  onConfirmMatch:        () => void
+  onUnmatch:             () => void
+  onManualMatch:         (plannedId: string) => void
 }
 
 export function SessionOverviewModal({
   session, visible, reflectionText, reflectionSaving, reflectionRef,
+  matchedPlannedSession, sameDayCandidates,
   onClose, onReflectionChange, onReflectionSave, onCoachOpen,
+  onConfirmMatch, onUnmatch, onManualMatch,
 }: SessionOverviewModalProps) {
   const [activeTab, setActiveTab] = useState<SessionTab>('overview')
 
@@ -934,6 +1113,32 @@ export function SessionOverviewModal({
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               <Pill color={isPlanned ? 'neutral' : 'success'}>{isPlanned ? 'Planned' : 'Completed'}</Pill>
+              {!isPlanned && session.match_status === 'auto' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>AI matched</span>
+                  <button
+                    onClick={onConfirmMatch}
+                    style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid #3FB37F', background: 'rgba(63,179,127,0.1)', color: '#3FB37F', cursor: 'pointer', fontFamily: 'inherit' }}
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={onUnmatch}
+                    style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-default)', background: 'transparent', color: 'var(--fg-3)', cursor: 'pointer', fontFamily: 'inherit' }}
+                  >
+                    Unmatch
+                  </button>
+                </div>
+              )}
+              {!isPlanned && session.match_status === 'confirmed' && (
+                <button
+                  onClick={onUnmatch}
+                  title="Unlink from planned session"
+                  style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, border: '1px solid var(--border-default)', background: 'transparent', color: 'var(--fg-4)', cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  Unmerge
+                </button>
+              )}
               <button
                 onClick={onClose}
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 4, transition: 'color 80ms' }}
@@ -979,9 +1184,12 @@ export function SessionOverviewModal({
                 reflectionText={reflectionText}
                 reflectionSaving={reflectionSaving}
                 reflectionRef={reflectionRef}
+                matchedPlannedSession={matchedPlannedSession}
+                sameDayCandidates={sameDayCandidates}
                 onReflectionChange={onReflectionChange}
                 onReflectionSave={onReflectionSave}
                 onCoachOpen={onCoachOpen}
+                onManualMatch={onManualMatch}
               />
             )}
             {activeTab === 'power'     && <PowerTab session={session} />}
@@ -1144,12 +1352,15 @@ function PlannedOverviewTab({ session, reflectionText, reflectionSaving, reflect
 
 // ── OverviewTab ───────────────────────────────────────────────────────────────
 
-function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef, onReflectionChange, onReflectionSave, onCoachOpen }: {
+function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef, matchedPlannedSession, sameDayCandidates, onReflectionChange, onReflectionSave, onCoachOpen, onManualMatch }: {
   session: SessionNoteRow
   reflectionText: string; reflectionSaving: boolean
   reflectionRef: React.RefObject<HTMLTextAreaElement | null>
+  matchedPlannedSession: SessionNoteRow | null
+  sameDayCandidates: SessionNoteRow[]
   onReflectionChange: (v: string) => void; onReflectionSave: () => void
   onCoachOpen: () => void
+  onManualMatch: (plannedId: string) => void
 }) {
   if (isPlannedSession(session)) {
     return (
@@ -1214,6 +1425,88 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
 
   return (
     <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* ── Planned vs Actual comparison ── */}
+      {matchedPlannedSession && (
+        <div style={{ padding: '14px 16px', background: 'rgba(63,179,127,0.04)', border: '1px solid rgba(63,179,127,0.15)', borderRadius: 8 }}>
+          <div style={{ fontSize: 10, color: '#3FB37F', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+            Planned vs Actual
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 24px' }}>
+            {[
+              {
+                label: 'Duration',
+                planned: formatDuration(matchedPlannedSession.planned_duration_seconds),
+                actual: formatDuration(session.actual_duration_seconds),
+              },
+              {
+                label: 'Load (TSS)',
+                planned: matchedPlannedSession.planned_tss ? String(Math.round(matchedPlannedSession.planned_tss)) : '—',
+                actual: session.actual_tss ? String(Math.round(session.actual_tss)) : '—',
+              },
+            ].map(row => (
+              <div key={row.label}>
+                <div style={{ fontSize: 9, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>{row.label}</div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginBottom: 1 }}>Planned</div>
+                    <span style={{ fontSize: 15, fontFamily: 'var(--font-mono)', fontWeight: 500, color: 'var(--fg-3)' }}>{row.planned}</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)' }}>→</span>
+                  <div>
+                    <div style={{ fontSize: 9, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginBottom: 1 }}>Actual</div>
+                    <span style={{ fontSize: 15, fontFamily: 'var(--font-mono)', fontWeight: 500, color: 'var(--fg-1)' }}>{row.actual}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {(matchedPlannedSession.name || matchedPlannedSession.description) && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(63,179,127,0.12)' }}>
+              {matchedPlannedSession.name && (
+                <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg-2)', marginBottom: 4 }}>{matchedPlannedSession.name}</div>
+              )}
+              {matchedPlannedSession.description && (
+                <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>{matchedPlannedSession.description}</div>
+              )}
+              {matchedPlannedSession.intervals_format && (
+                <pre style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {matchedPlannedSession.intervals_format}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Manual link to planned session ── */}
+      {sameDayCandidates.length > 0 && (
+        <div style={{ padding: '12px 14px', background: 'var(--bg-1)', border: '1px dashed var(--border-default)', borderRadius: 8 }}>
+          <div style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            Link to planned session
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {sameDayCandidates.map(p => (
+              <div key={p.session_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div>
+                  <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>{p.name || getSportLabel(p.sport)}</span>
+                  {p.planned_duration_seconds && (
+                    <span style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginLeft: 6 }}>
+                      {formatDuration(p.planned_duration_seconds)}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => onManualMatch(p.session_id)}
+                  style={{ fontSize: 11, padding: '3px 10px', borderRadius: 5, border: '1px solid var(--border-default)', background: 'transparent', color: 'var(--fg-2)', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}
+                >
+                  Link
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Key stats grid — 2 rows of 4 */}
       <div>
