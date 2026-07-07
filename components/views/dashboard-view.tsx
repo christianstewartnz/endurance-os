@@ -900,22 +900,28 @@ function WeekStrip({
     })
   }, [navigating, weekMonday])
 
-  // Index completed sessions by date
+  // Index sessions by date (last one wins for display — typically one planned per day)
   const sessionByDate = new Map<string, SessionNoteRow>()
   for (const s of sessions) {
     sessionByDate.set(s.session_date, s)
   }
 
-  // Index planned events by date
+  // Index planned events by date, filtering out any that are already in session_notes
+  // (matched by external_id === session_id) to avoid double-counting.
+  const sessionIds = new Set(sessions.map(s => s.session_id))
   const eventByDate = new Map<string, IntervalEvent>()
   for (const e of events) {
+    if (e.external_id && sessionIds.has(e.external_id)) continue
     const date = e.start_date_local.split('T')[0]
     eventByDate.set(date, e)
   }
 
   const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-  const plannedTss = events.reduce((s, e) => s + (e.icu_training_load ?? 0), 0)
+  // Sum TSS from sessions + non-duplicate events only
+  const sessionsTss = sessions.reduce((acc, s) => acc + (s.planned_tss ?? s.actual_tss ?? 0), 0)
+  const eventsTss = Array.from(eventByDate.values()).reduce((acc, e) => acc + (e.icu_training_load ?? 0), 0)
+  const plannedTss = Math.round(sessionsTss + eventsTss)
   const weekLabel = `${weekDates[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekDates[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 
   return (
@@ -953,10 +959,11 @@ function WeekStrip({
           let zone: string | null = null
 
           if (session) {
-            state = isToday ? 'today' : 'done'
-            displayName = session.session_type ?? 'Workout'
-            duration = formatDuration(session.actual_duration_seconds)
-            tss = session.actual_tss
+            const isSessionPlanned = session.actual_duration_seconds == null
+            state = isToday ? 'today' : isSessionPlanned ? 'planned' : 'done'
+            displayName = session.name || session.session_type ?? 'Workout'
+            duration = formatDuration(isSessionPlanned ? session.planned_duration_seconds : session.actual_duration_seconds)
+            tss = isSessionPlanned ? (session.planned_tss ?? null) : session.actual_tss
             zone = getZoneFromType(session.session_type)
           } else if (event) {
             state = isToday ? 'today' : 'planned'

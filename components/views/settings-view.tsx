@@ -14,6 +14,8 @@ interface IntervalsConnectionState {
 interface AnthropicKeyState {
   connected: boolean
   last4: string | null
+  valid?: boolean
+  error?: string
 }
 
 interface AthleteProfileData {
@@ -510,7 +512,9 @@ function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
   const [keyInput, setKeyInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<'valid' | 'invalid' | null>(null)
 
   useEffect(() => {
     if (!initial) {
@@ -520,6 +524,27 @@ function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
         .catch(() => {})
     }
   }, [initial])
+
+  async function handleTest() {
+    setTesting(true)
+    setTestResult(null)
+    setError(null)
+    try {
+      const res = await fetch('/api/keys/anthropic?verify=true')
+      const data = await res.json() as { connected: boolean; valid?: boolean; error?: string }
+      if (data.valid === false) {
+        setTestResult('invalid')
+        setError(data.error ?? 'Key is invalid or expired')
+      } else {
+        setTestResult('valid')
+      }
+    } catch {
+      setTestResult('invalid')
+      setError('Could not reach Anthropic API')
+    } finally {
+      setTesting(false)
+    }
+  }
 
   async function handleConnect() {
     if (!keyInput.trim()) return
@@ -584,9 +609,28 @@ function APIKeysPanel({ initial }: { initial?: AnthropicKeyState }) {
         </div>
 
         {keyState.connected ? (
-          <Button kind="ghost" size="sm" icon="trash-2" onClick={handleRemove}>
-            {removing ? 'Removing…' : 'Remove key'}
-          </Button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button kind="ghost" size="sm" icon="zap" onClick={handleTest}>
+                {testing ? 'Testing…' : 'Test connection'}
+              </Button>
+              <Button kind="ghost" size="sm" icon="trash-2" onClick={handleRemove}>
+                {removing ? 'Removing…' : 'Remove key'}
+              </Button>
+            </div>
+            {testResult === 'valid' && (
+              <div style={{ fontSize: 12, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Icon name="check-circle" size={12} />
+                Key is valid and working
+              </div>
+            )}
+            {testResult === 'invalid' && error && (
+              <div style={{ fontSize: 12, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Icon name="alert-circle" size={12} />
+                {error}
+              </div>
+            )}
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420 }}>
             <input

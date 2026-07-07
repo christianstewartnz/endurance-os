@@ -196,4 +196,13 @@ export interface SessionNoteRow {
   fueling_fluid_ml_per_hour?: number | null
   fueling_sodium_mg_per_hour?: number | null
   fueling_note?: string | null
+  // Planned session fields (set when session is created by coach/training plan)
+  name?: string | null
+  planned_tss?: number | null
+  planned_duration_seconds?: number | null
+  training_plan_id?: string | null
+  plan_phase?: string | null
+  detail_level?: string | null
+  intervals_format?: string | null
+  description?: string | null
 }

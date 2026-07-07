@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -15,10 +15,36 @@ export async function GET() {
     .single()
 
   const key = data?.anthropic_api_key as string | null
-  return NextResponse.json({
-    connected: !!key,
-    last4: key ? key.slice(-4) : null,
-  })
+  if (!key) return NextResponse.json({ connected: false, last4: null })
+
+  const verify = new URL(req.url).searchParams.get('verify') === 'true'
+  if (verify) {
+    try {
+      const testRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 10,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      })
+      if (!testRes.ok) {
+        const err = await testRes.json().catch(() => ({}))
+        const msg = (err as { error?: { message?: string } }).error?.message ?? 'Key is invalid or expired'
+        return NextResponse.json({ connected: true, last4: key.slice(-4), valid: false, error: msg })
+      }
+    } catch {
+      return NextResponse.json({ connected: true, last4: key.slice(-4), valid: false, error: 'Could not reach Anthropic API' })
+    }
+    return NextResponse.json({ connected: true, last4: key.slice(-4), valid: true })
+  }
+
+  return NextResponse.json({ connected: true, last4: key.slice(-4) })
 }
 
 export async function POST(req: NextRequest) {

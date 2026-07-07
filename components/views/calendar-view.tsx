@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Icon, Button, Pill } from '@/components/atoms'
 import { useCoachPanel } from '@/components/app-shell'
 import type { WellnessCacheRow, SessionNoteRow, IntervalEvent } from '@/lib/intervals/types'
@@ -349,6 +349,10 @@ export default function CalendarView({
   const [reflectionSaving, setReflectionSaving] = useState(false)
   const reflectionRef = useRef<HTMLTextAreaElement>(null)
 
+  // Compute today in the browser's local timezone so NZ (UTC+12/+13) users
+  // get the correct date regardless of the server's UTC clock.
+  const localTodayStr = new Date().toLocaleDateString('en-CA')
+
   const sessionsByDate = new Map<string, SessionNoteRow[]>()
   sessions.forEach(s => {
     const arr = sessionsByDate.get(s.session_date) ?? []
@@ -358,8 +362,12 @@ export default function CalendarView({
   const wellnessByDate = new Map<string, WellnessCacheRow>()
   wellness.forEach(w => wellnessByDate.set(w.date, w))
 
+  // Filter out intervals.icu events already represented in session_notes
+  // (matched by external_id === session_id) — DB record takes priority.
+  const allSessionIds = new Set(sessions.map(s => s.session_id))
   const eventsByDate = new Map<string, IntervalEvent[]>()
   plannedEvents.forEach(e => {
+    if (e.external_id && allSessionIds.has(e.external_id)) return
     const date = e.start_date_local.split('T')[0]
     const arr = eventsByDate.get(date) ?? []
     eventsByDate.set(date, [...arr, e])
@@ -493,36 +501,42 @@ export default function CalendarView({
 
         <div style={gridAnimStyle(gridPhase)}>
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '200px repeat(7, 1fr)', background: 'var(--bg-1)', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div style={{ padding: '8px 14px', fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-mono)' }}>Week</div>
+            {/* Single shared grid — all rows use the same column tracks so headers always align with cells */}
+            <div style={{ display: 'grid', gridTemplateColumns: '200px repeat(7, 1fr)' }}>
+
+              {/* Header row */}
+              <div style={{ padding: '8px 14px', fontSize: 10, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'var(--font-mono)', background: 'var(--bg-1)', borderBottom: '1px solid var(--border-subtle)' }}>
+                Week
+              </div>
               {DAYS.map(d => (
-                <div key={d} style={{ padding: '8px 8px', fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em', borderLeft: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)' }}>
+                <div key={d} style={{ padding: '8px 8px', fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em', borderLeft: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)', background: 'var(--bg-1)', borderBottom: '1px solid var(--border-subtle)' }}>
                   {d}
                 </div>
               ))}
-            </div>
 
-            {weeks.map((wk, wi) => (
-              <div key={wi} style={{
-                display: 'grid',
-                gridTemplateColumns: '200px repeat(7, 1fr)',
-                borderBottom: wi < weeks.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-              }}>
-                <WeekInfoCell wk={wk} />
-                {wk.days.map((dateStr, di) => (
-                  <DayCell
-                    key={di}
-                    dateStr={dateStr}
-                    sessions={sessionsByDate.get(dateStr) ?? []}
-                    events={eventsByDate.get(dateStr) ?? []}
-                    wellness={wellnessByDate.get(dateStr)}
-                    isToday={dateStr === todayStr}
-                    selectedId={modalSession?.session_id ?? null}
-                    onSelect={openModal}
-                  />
-                ))}
-              </div>
-            ))}
+              {/* Week data rows */}
+              {weeks.map((wk, wi) => {
+                const rowBorder = wi < weeks.length - 1 ? '1px solid var(--border-subtle)' : 'none'
+                return (
+                  <React.Fragment key={wi}>
+                    <WeekInfoCell wk={wk} borderBottom={rowBorder} />
+                    {wk.days.map((dateStr, di) => (
+                      <DayCell
+                        key={di}
+                        dateStr={dateStr}
+                        sessions={sessionsByDate.get(dateStr) ?? []}
+                        events={eventsByDate.get(dateStr) ?? []}
+                        wellness={wellnessByDate.get(dateStr)}
+                        isToday={dateStr === localTodayStr}
+                        selectedId={modalSession?.session_id ?? null}
+                        onSelect={openModal}
+                        borderBottom={rowBorder}
+                      />
+                    ))}
+                  </React.Fragment>
+                )
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -546,13 +560,14 @@ export default function CalendarView({
 
 // ── WeekInfoCell ──────────────────────────────────────────────────────────────
 
-function WeekInfoCell({ wk }: {
+function WeekInfoCell({ wk, borderBottom }: {
   wk: {
     weekNum: number; range: string
     totalTimeSecs: number; totalTss: number
     ctl: number | null; atl: number | null; tsb: number | null
     sportBreakdown: Record<string, number>
   }
+  borderBottom?: string
 }) {
   const mono = { fontFamily: 'var(--font-mono)' } as const
   const lbl  = { ...mono, fontSize: 9,  color: 'var(--fg-4)', textTransform: 'uppercase' as const, letterSpacing: '0.04em' }
@@ -562,7 +577,7 @@ function WeekInfoCell({ wk }: {
   const tsbColor = wk.tsb == null ? 'var(--fg-2)' : wk.tsb > 5 ? '#3FB37F' : wk.tsb < -20 ? '#E5484D' : 'var(--fg-2)'
 
   return (
-    <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3, minHeight: 90 }}>
+    <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3, minHeight: 90, borderBottom: borderBottom ?? 'none' }}>
       <div style={{ ...mono, fontSize: 12, fontWeight: 600, color: 'var(--fg-1)' }}>Week {wk.weekNum}</div>
       <div style={{ ...mono, fontSize: 10, color: 'var(--fg-3)', marginBottom: 4 }}>{wk.range}</div>
       {wk.totalTimeSecs > 0 && (
@@ -594,19 +609,23 @@ function WeekInfoCell({ wk }: {
 
 // ── DayCell ───────────────────────────────────────────────────────────────────
 
-function DayCell({ dateStr, sessions, events, wellness, isToday, selectedId, onSelect }: {
+function DayCell({ dateStr, sessions, events, wellness, isToday, selectedId, onSelect, borderBottom }: {
   dateStr: string; sessions: SessionNoteRow[]
   events: IntervalEvent[]; wellness: WellnessCacheRow | undefined
   isToday: boolean; selectedId: string | null
   onSelect: (s: SessionNoteRow) => void
+  borderBottom?: string
 }) {
   const hrvColor = getHrvStatus(wellness)
 
   return (
     <div style={{
       borderLeft: '1px solid var(--border-subtle)',
+      borderBottom: borderBottom ?? 'none',
       padding: '8px 6px',
       minHeight: 90,
+      minWidth: 0,
+      overflow: 'hidden',
       background: isToday ? 'rgba(139,124,246,0.04)' : 'transparent',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -646,9 +665,17 @@ function DayCell({ dateStr, sessions, events, wellness, isToday, selectedId, onS
 
 // ── SessionCard ───────────────────────────────────────────────────────────────
 
+function isPlannedSession(s: SessionNoteRow): boolean {
+  return s.actual_duration_seconds == null
+}
+
 function SessionCard({ session, isSelected, onClick }: {
   session: SessionNoteRow; isSelected: boolean; onClick: () => void
 }) {
+  if (isPlannedSession(session)) {
+    return <PlannedSessionCard session={session} isSelected={isSelected} onClick={onClick} />
+  }
+
   const sportColor = getSportColor(session.sport)
   const sportLabel = getSportLabel(session.sport)
   const isCycling  = session.sport === 'cycling'
@@ -742,6 +769,54 @@ function SessionCard({ session, isSelected, onClick }: {
   )
 }
 
+// ── PlannedSessionCard ────────────────────────────────────────────────────────
+
+function PlannedSessionCard({ session, isSelected, onClick }: {
+  session: SessionNoteRow; isSelected: boolean; onClick: () => void
+}) {
+  const sportColor  = getSportColor(session.sport)
+  const sportLabel  = getSportLabel(session.sport)
+  const displayName = session.name || sportLabel
+  const duration    = formatDuration(session.planned_duration_seconds)
+
+  // First non-empty line of coach notes as a brief hint
+  const briefNote = session.description ||
+    (session.intervals_format
+      ? session.intervals_format.split('\n').find(l => l.trim().length > 0)?.slice(0, 55)
+      : null)
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: '6px 8px',
+        background: 'transparent',
+        borderTop: `1px dashed ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderRight: `1px dashed ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderBottom: `1px dashed ${isSelected ? 'var(--border-strong)' : 'var(--border-default)'}`,
+        borderLeft: `2px dashed ${sportColor}`,
+        borderRadius: 5,
+        cursor: 'pointer',
+        width: '100%',
+        boxSizing: 'border-box',
+        transition: 'border-color 80ms',
+      }}
+    >
+      <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-2)', fontWeight: 500, marginBottom: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {displayName}
+      </div>
+      <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-4)' }}>
+        {duration}{session.planned_tss ? ` · ${Math.round(session.planned_tss)} TSS` : ''}
+      </div>
+      {briefNote && (
+        <div style={{ fontSize: 10, color: 'var(--fg-4)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>
+          {briefNote}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── PlannedEventCard ──────────────────────────────────────────────────────────
 
 function PlannedEventCard({ event }: { event: IntervalEvent }) {
@@ -793,13 +868,16 @@ export function SessionOverviewModal({
   // Reset tab when session changes
   useEffect(() => { setActiveTab('overview') }, [session.session_id])
 
+  const isPlanned  = isPlannedSession(session)
   const isCycling  = session.sport === 'cycling'
   const isRunning  = session.sport === 'running'
   const isSwimming = session.sport === 'swimming'
   const sportColor = getSportColor(session.sport)
   const sportLabel = getSportLabel(session.sport)
 
-  const tabs: { id: SessionTab; label: string }[] = [
+  const tabs: { id: SessionTab; label: string }[] = isPlanned ? [
+    { id: 'overview', label: 'Overview' },
+  ] : [
     { id: 'overview',  label: 'Overview' },
     ...(isCycling  ? [{ id: 'power'  as SessionTab, label: 'Power' }] : []),
     ...(isRunning  ? [{ id: 'pace'   as SessionTab, label: 'Pace & Cadence' }] : []),
@@ -855,7 +933,7 @@ export function SessionOverviewModal({
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              <Pill color="success">Completed</Pill>
+              <Pill color={isPlanned ? 'neutral' : 'success'}>{isPlanned ? 'Planned' : 'Completed'}</Pill>
               <button
                 onClick={onClose}
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-3)', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 4, transition: 'color 80ms' }}
@@ -934,6 +1012,136 @@ export function SessionOverviewModal({
   )
 }
 
+// ── PlannedOverviewTab ────────────────────────────────────────────────────────
+
+function PlannedOverviewTab({ session, reflectionText, reflectionSaving, reflectionRef, onReflectionChange, onReflectionSave, onCoachOpen }: {
+  session: SessionNoteRow
+  reflectionText: string; reflectionSaving: boolean
+  reflectionRef: React.RefObject<HTMLTextAreaElement | null>
+  onReflectionChange: (v: string) => void; onReflectionSave: () => void
+  onCoachOpen: () => void
+}) {
+  const sportColor = getSportColor(session.sport)
+  const sportLabel = getSportLabel(session.sport)
+
+  return (
+    <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* Planned targets */}
+      <div>
+        <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-4)', marginBottom: 12 }}>
+          Planned
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px 12px' }}>
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sport</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 500, color: sportColor, lineHeight: 1 }}>{sportLabel}</span>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Duration</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 500, color: 'var(--fg-1)', lineHeight: 1 }}>{formatDuration(session.planned_duration_seconds)}</span>
+            </div>
+          </div>
+          {session.planned_tss != null && (
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Target Load</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 500, color: 'var(--fg-1)', lineHeight: 1 }}>{Math.round(session.planned_tss)}</span>
+                <span style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>TSS</span>
+              </div>
+            </div>
+          )}
+          {session.plan_phase && (
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Phase</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 4 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 500, color: 'var(--fg-2)', lineHeight: 1, textTransform: 'capitalize' }}>{session.plan_phase}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Coach session notes */}
+      {(session.intervals_format || session.description) && (
+        <div style={{ padding: '14px 16px', background: 'rgba(139,124,246,0.04)', border: '1px solid rgba(139,124,246,0.12)', borderRadius: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <Icon name="sparkles" size={11} color="var(--ai)" />
+            <span style={{ fontSize: 10, color: 'var(--ai)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Coach Notes
+            </span>
+          </div>
+          {session.description && (
+            <div style={{ fontSize: 13, color: 'var(--fg-1)', lineHeight: 1.6, marginBottom: session.intervals_format ? 10 : 0 }}>
+              {session.description}
+            </div>
+          )}
+          {session.intervals_format && (
+            <pre style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.65, margin: 0, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {session.intervals_format}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* Fueling plan if set */}
+      {(session.fueling_carb_g_per_hour || session.fueling_fluid_ml_per_hour || session.fueling_sodium_mg_per_hour || session.fueling_note) && (
+        <div style={{ padding: '14px 16px', background: 'rgba(139,124,246,0.04)', border: '1px solid rgba(139,124,246,0.12)', borderRadius: 8 }}>
+          <div style={{ fontSize: 10, color: 'var(--ai)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+            Fueling plan
+          </div>
+          {(session.fueling_carb_g_per_hour || session.fueling_fluid_ml_per_hour || session.fueling_sodium_mg_per_hour) && (
+            <div style={{ fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-mono)', marginBottom: session.fueling_note ? 6 : 0 }}>
+              {[
+                session.fueling_carb_g_per_hour ? `${session.fueling_carb_g_per_hour}g carbs/h` : null,
+                session.fueling_fluid_ml_per_hour ? `${session.fueling_fluid_ml_per_hour}ml fluid/h` : null,
+                session.fueling_sodium_mg_per_hour ? `${session.fueling_sodium_mg_per_hour}mg sodium/h` : null,
+              ].filter(Boolean).join(' · ')}
+            </div>
+          )}
+          {session.fueling_note && (
+            <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>{session.fueling_note}</div>
+          )}
+        </div>
+      )}
+
+      {/* Athlete reflection */}
+      <div>
+        <div style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+          Notes
+        </div>
+        <textarea
+          ref={reflectionRef}
+          value={reflectionText}
+          onChange={e => onReflectionChange(e.target.value)}
+          onBlur={onReflectionSave}
+          placeholder="Add pre-session notes…"
+          rows={3}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            background: 'var(--bg-1)', border: '1px solid var(--border-subtle)',
+            borderRadius: 6, padding: '8px 10px',
+            fontSize: 13, color: 'var(--fg-1)', fontFamily: 'var(--font-sans)',
+            lineHeight: 1.5, resize: 'vertical', outline: 'none',
+          }}
+        />
+        {reflectionSaving && (
+          <div style={{ fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>Saving…</div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button kind="ai" size="sm" icon="sparkles" onClick={onCoachOpen}>
+          Discuss with Coach
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ── OverviewTab ───────────────────────────────────────────────────────────────
 
 function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef, onReflectionChange, onReflectionSave, onCoachOpen }: {
@@ -943,6 +1151,20 @@ function OverviewTab({ session, reflectionText, reflectionSaving, reflectionRef,
   onReflectionChange: (v: string) => void; onReflectionSave: () => void
   onCoachOpen: () => void
 }) {
+  if (isPlannedSession(session)) {
+    return (
+      <PlannedOverviewTab
+        session={session}
+        reflectionText={reflectionText}
+        reflectionSaving={reflectionSaving}
+        reflectionRef={reflectionRef}
+        onReflectionChange={onReflectionChange}
+        onReflectionSave={onReflectionSave}
+        onCoachOpen={onCoachOpen}
+      />
+    )
+  }
+
   const isCycling  = session.sport === 'cycling'
   const isRunning  = session.sport === 'running'
   const isSwimming = session.sport === 'swimming'
