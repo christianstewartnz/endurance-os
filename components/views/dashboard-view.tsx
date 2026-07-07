@@ -73,7 +73,7 @@ export default function DashboardView({
   // Use browser local date (en-CA locale = YYYY-MM-DD) so UTC+12/+13 users
   // get their correct local date rather than the server's UTC date.
   const localToday = new Date().toLocaleDateString('en-CA')
-  const todaySession = recentSessions.find((s) => s.session_date === localToday) ?? null
+  const todaySession = recentSessions.find((s) => s.session_date === localToday && s.actual_duration_seconds !== null) ?? null
   const todayEvent   = weekEvents.find((e) => e.start_date_local.startsWith(localToday)) ?? null
   const router = useRouter()
   const { openCoach } = useCoachPanel()
@@ -961,7 +961,7 @@ function WeekStrip({
           if (session) {
             const isSessionPlanned = session.actual_duration_seconds == null
             state = isToday ? 'today' : isSessionPlanned ? 'planned' : 'done'
-            displayName = session.name || session.session_type ?? 'Workout'
+            displayName = session.name || (session.session_type ?? 'Workout')
             duration = formatDuration(isSessionPlanned ? session.planned_duration_seconds : session.actual_duration_seconds)
             tss = isSessionPlanned ? (session.planned_tss ?? null) : session.actual_tss
             zone = getZoneFromType(session.session_type)
